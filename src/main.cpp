@@ -1,12 +1,12 @@
-#include <iostream>
+ï»¿#include <iostream>
 #include <fstream>
 #include <sstream>
-#include "CEAssembly.h"  // Ê¹ÓÃÍ³Ò»°üº¬ÎÄ¼ş
+#include "CEAssembly.h"  // ä½¿ç”¨ç»Ÿä¸€åŒ…å«æ–‡ä»¶
 #include "DebugHelper.h"   
 
 int main() {
     DEBUG_INIT(DebugLevel::Trace);
-    // Ê¾Àı½Å±¾
+    // ç¤ºä¾‹è„šæœ¬
     std::string scriptContent = R"(
 [ENABLE]
 aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10)
@@ -36,23 +36,23 @@ unregistersymbol(INJECT)
 dealloc(newmem)
 )";
 
-    // ĞÂµÄÊ¹ÓÃ·½Ê½
-    std::cout << "=== ĞÂµÄAPIÊ¹ÓÃÊ¾Àı ===" << std::endl;
+    // æ–°çš„ä½¿ç”¨æ–¹å¼
+    std::cout << "=== æ–°çš„APIä½¿ç”¨ç¤ºä¾‹ ===" << std::endl;
 
-    // ¼òµ¥Ê¾Àı
+    // ç®€å•ç¤ºä¾‹
     CEAssemblyEngine engine;
     if (engine.AttachToProcess("notepad.exe")) {
         auto script = engine.CreateScript("RemoteHack");
         script->Load(scriptContent);
         script->Enable();
-        std::cout << "\n°´ÈÎÒâ¼ü½ûÓÃ½Å±¾..." << std::endl;
+        std::cout << "\næŒ‰ä»»æ„é”®ç¦ç”¨è„šæœ¬..." << std::endl;
         std::cin.get();
-        std::cout << "½ûÓÃ½Å±¾..." << std::endl;
+        std::cout << "ç¦ç”¨è„šæœ¬..." << std::endl;
         if (script->Disable()) {
-            std::cout << "½Å±¾ÒÑ½ûÓÃ!" << std::endl;
+            std::cout << "è„šæœ¬å·²ç¦ç”¨!" << std::endl;
         }
         else {
-            std::cout << "½ûÓÃÊ§°Ü: " << script->GetLastError() << std::endl;
+            std::cout << "ç¦ç”¨å¤±è´¥: " << script->GetLastError() << std::endl;
         }
 
     }
