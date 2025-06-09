@@ -1,5 +1,6 @@
 // CEScript.cpp
 #include "CEScript.h"
+#include "DebugHelper.h"
 #include "CEAssemblyEngine.h"  // 需要包含以获取PatchInfo定义
 #include "Parser/CEScriptParser.h"
 #include <fstream>
@@ -27,7 +28,8 @@ bool CEScript::Load(const std::string& scriptContent) {
     // 清空之前的内容
     m_enableBlock.clear();
     m_disableBlock.clear();
-
+    LOG_INFO_F("Script \"%s\" loaded. ENABLE=%zu lines, DISABLE=%zu lines",
+        m_name.c_str(), m_enableBlock.size(), m_disableBlock.size());
     // 使用解析器分离ENABLE和DISABLE块
     CEScriptParser parser;
     parser.ParseScript(scriptContent, m_enableBlock, m_disableBlock);
@@ -66,6 +68,7 @@ bool CEScript::Enable() {
 
     if (m_enabled) {
         m_lastError = "Script already enabled";
+        LOG_INFO_F("Enabling script \"%s\"", m_name.c_str());
         return false;
     }
 
@@ -78,9 +81,10 @@ bool CEScript::Enable() {
     // 执行ENABLE块
     if (!m_engine->ProcessEnableBlock(m_enableBlock)) {
         m_lastError = m_engine->GetLastError();
+        LOG_ERROR_F("Enable failed : %s", m_lastError.c_str());
         return false;
     }
-
+    LOG_INFO("Enable success");
     // 获取所有的补丁信息
     m_patches = m_engine->GetPatches();
 

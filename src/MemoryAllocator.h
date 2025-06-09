@@ -17,6 +17,7 @@ public:
 
     // 在指定地址附近分配内存
     uintptr_t AllocateNear(uintptr_t nearAddress, size_t size, const std::string& name);
+    struct PoolInfo { uintptr_t base; size_t size; size_t used; };
 
     // 释放分配的内存
     bool Deallocate(const std::string& name);

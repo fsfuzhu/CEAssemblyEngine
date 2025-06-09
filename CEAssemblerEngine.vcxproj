@@ -21,10 +21,10 @@
   <ItemGroup>
     <ClCompile Include="src\CEAssemblyEngine.cpp" />
     <ClCompile Include="src\CEScript.cpp" />
+    <ClCompile Include="src\DebugHelper.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\MemoryAllocator.cpp" />
     <ClCompile Include="src\Parser\CEScriptParser.cpp" />
-    <ClCompile Include="src\Parser\Tokenizer.cpp" />
     <ClCompile Include="src\PatternScanner.cpp" />
     <ClCompile Include="src\ProcessManager.cpp" />
     <ClCompile Include="src\SymbolManager.cpp" />
@@ -44,9 +44,9 @@
     <ClInclude Include="src\CEAssembly.h" />
     <ClInclude Include="src\CEAssemblyEngine.h" />
     <ClInclude Include="src\CEScript.h" />
+    <ClInclude Include="src\DebugHelper.h" />
     <ClInclude Include="src\MemoryAllocator.h" />
     <ClInclude Include="src\Parser\CEScriptParser.h" />
-    <ClInclude Include="src\Parser\Tokenizer.h" />
     <ClInclude Include="src\PatternScanner.h" />
     <ClInclude Include="src\ProcessManager.h" />
     <ClInclude Include="src\SymbolManager.h" />

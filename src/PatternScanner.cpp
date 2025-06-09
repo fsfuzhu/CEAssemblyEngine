@@ -1,6 +1,7 @@
 // PatternScanner.cpp
 #include "PatternScanner.h"
 #include "ProcessManager.h"
+#include "DebugHelper.h"
 #include <sstream>
 #include <Psapi.h>
 #include <algorithm>
@@ -70,6 +71,8 @@ std::vector<PatternByte> PatternScanner::ParsePattern(const std::string& pattern
 uintptr_t PatternScanner::ScanModule(const std::string& moduleName, const std::string& pattern) {
     uintptr_t moduleBase = 0;
     size_t moduleSize = 0;
+    LOG_INFO_F("ScanModule -> module=%s, pattern=\"%s\"",
+        moduleName.c_str(), pattern.c_str());
 
     if (m_processManager && m_processManager->GetHandle()) {
         // ¿ç½ø³ÌÉ¨Ãè
@@ -145,10 +148,11 @@ uintptr_t PatternScanner::ScanMemory(uintptr_t start, size_t size, const std::ve
                     m_capturedVariables[pattern[j].captureName] = capturedData;
                 }
             }
+            LOG_INFO_F("Pattern found @ 0x%llX", start + i);
 
             return start + i;
         }
     }
-
+    LOG_WARN("Pattern not found");
     return 0;
 }

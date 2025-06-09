@@ -5,6 +5,7 @@
 #include <memory>
 #include <Windows.h>
 #include <keystone/keystone.h>
+#include "MemoryAllocator.h"
 
 // 前向声明
 class SymbolManager;
@@ -120,7 +121,7 @@ private:
     ks_engine* m_ksEngine;
     std::string m_lastError;
     std::string m_targetModule;
-    bool m_isExternal;  // 是否是外部进程
+
 
     // 当前脚本上下文
     CEScript* m_currentScript;
@@ -137,4 +138,7 @@ private:
 
     // 添加补丁记录
     void AddPatch(uintptr_t address, const std::vector<uint8_t>& originalBytes, const std::vector<uint8_t>& newBytes);
+
+    std::unordered_map<uintptr_t, MemoryAllocator::PoolInfo> m_jumpPools;
+    MemoryAllocator::PoolInfo& EnsureJumpTableNear(uintptr_t injectAddr);
 };

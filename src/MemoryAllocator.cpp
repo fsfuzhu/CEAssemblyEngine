@@ -1,6 +1,7 @@
 // MemoryAllocator.cpp
 #include "MemoryAllocator.h"
 #include "ProcessManager.h"
+#include "DebugHelper.h"
 #include <vector>
 #include <algorithm>
 
@@ -105,6 +106,8 @@ uintptr_t MemoryAllocator::AllocateNear(uintptr_t nearAddress, size_t size, cons
         alloc.size = size;
         m_allocations[name] = alloc;
     }
+    if (!address) LOG_ERROR_F("AllocateNear failed (name=%s, size=0x%zX)",
+        name.c_str(), size);
 
     return address;
 }

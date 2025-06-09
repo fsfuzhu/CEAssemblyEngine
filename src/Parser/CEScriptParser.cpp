@@ -165,9 +165,8 @@ bool CEScriptParser::IsAssemblyInstruction(const std::string& line) {
     std::string upperLine = line;
     std::transform(upperLine.begin(), upperLine.end(), upperLine.begin(), ::toupper);
 
-    // 检查是否是标签定义
-    if (line.back() == ':') {
-        return false;
+    if (!line.empty() && line.back() == ':') {
+        return true;        // ← 之前是 return false
     }
 
     // 检查是否以汇编指令开始

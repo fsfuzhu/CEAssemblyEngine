@@ -2,9 +2,10 @@
 #include <fstream>
 #include <sstream>
 #include "CEAssembly.h"  // 使用统一包含文件
-
+#include "DebugHelper.h"   
 
 int main() {
+    DEBUG_INIT(DebugLevel::Trace);
     // 示例脚本
     std::string scriptContent = R"(
 [ENABLE]
@@ -55,5 +56,5 @@ dealloc(newmem)
         }
 
     }
-
+    DEBUG_SHUTDOWN();
 }
