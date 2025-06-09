@@ -1,0 +1,128 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="src">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="lib">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="include\keystone">
+      <UniqueIdentifier>{4534b985-503b-4681-b6e4-de3fd39b94de}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Parser">
+      <UniqueIdentifier>{36095833-97f8-477d-895b-f92c6be48227}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\Utils">
+      <UniqueIdentifier>{1e0ec1c9-dbfd-4f7d-9d7f-e273a73fc106}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\CEAssemblyEngine.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\MemoryAllocator.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\PatternScanner.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SymbolManager.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Parser\CEScriptParser.cpp">
+      <Filter>src\Parser</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Parser\Tokenizer.cpp">
+      <Filter>src\Parser</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Utils\StringUtils.cpp">
+      <Filter>src\Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="src\CEScript.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ProcessManager.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\CEAssemblyEngine.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\MemoryAllocator.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\PatternScanner.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\SymbolManager.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\arm.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\arm64.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\evm.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\hexagon.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\keystone.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\mips.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\ppc.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\sparc.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\systemz.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="include\keystone\x86.h">
+      <Filter>include\keystone</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Parser\CEScriptParser.h">
+      <Filter>src\Parser</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Parser\Tokenizer.h">
+      <Filter>src\Parser</Filter>
+    </ClInclude>
+    <ClInclude Include="src\Utils\StringUtils.h">
+      <Filter>src\Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="src\CEScript.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\CEAssembly.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ProcessManager.h">
+      <Filter>src</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Library Include="lib\keystone.lib">
+      <Filter>lib</Filter>
+    </Library>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+  </ItemGroup>
+</Project>
