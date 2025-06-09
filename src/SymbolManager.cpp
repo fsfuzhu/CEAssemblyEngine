@@ -7,7 +7,24 @@ void SymbolManager::RegisterSymbol(const std::string& name, uintptr_t address, s
     info.address = address;
     info.size = size;
     info.isLabel = isLabel;
-    m_symbols[name] = info;
+
+    // 检查是否已存在，如果存在且新地址不为0，则更新地址
+    auto it = m_symbols.find(name);
+    if (it != m_symbols.end()) {
+        if (address != 0) {
+            // 更新地址，保留其他信息
+            it->second.address = address;
+            if (size > 0) {
+                it->second.size = size;
+            }
+            it->second.isLabel = isLabel;
+        }
+        // 如果新地址为0，保持原有地址不变（用于前向引用的情况）
+    }
+    else {
+        // 新符号，直接添加
+        m_symbols[name] = info;
+    }
 }
 
 void SymbolManager::RegisterCapturedData(const std::string& name, const std::vector<uint8_t>& data) {

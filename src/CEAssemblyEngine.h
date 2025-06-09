@@ -80,7 +80,7 @@ public:
     // 获取进程管理器（高级用法）
     ProcessManager* GetProcessManager() { return m_processManager.get(); }
 
-    // 友元类，允许CEScript访问私有方法
+    // 友元类，允许CEScript访问内部方法
     friend class CEScript;
 
 private:
@@ -111,6 +111,12 @@ private:
     // 替换符号
     std::string ReplaceSymbols(const std::string& line);
 
+    // 汇编指令处理
+    bool ProcessAssemblyInstruction(const std::string& line);
+    bool ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr);
+    bool WriteBytes(const std::vector<uint8_t>& bytes);
+    bool ProcessDbCommand(const std::string& line);
+
     // 成员变量
     std::unique_ptr<ProcessManager> m_processManager;
     std::unique_ptr<SymbolManager> m_symbolManager;
@@ -122,7 +128,6 @@ private:
     std::string m_lastError;
     std::string m_targetModule;
 
-
     // 当前脚本上下文
     CEScript* m_currentScript;
 
@@ -132,13 +137,9 @@ private:
     // 补丁信息
     std::vector<PatchInfo> m_patches;
 
-    // 当前处理的标签
-    std::string m_currentLabel;
+    // 当前处理地址
     uintptr_t m_currentAddress;
 
     // 添加补丁记录
     void AddPatch(uintptr_t address, const std::vector<uint8_t>& originalBytes, const std::vector<uint8_t>& newBytes);
-
-    std::unordered_map<uintptr_t, MemoryAllocator::PoolInfo> m_jumpPools;
-    MemoryAllocator::PoolInfo& EnsureJumpTableNear(uintptr_t injectAddr);
 };
