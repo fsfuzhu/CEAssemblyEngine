@@ -1,4 +1,4 @@
-// PatternScanner.h
+// PatternScanner.h - 模式扫描器
 #pragma once
 #include <string>
 #include <vector>
@@ -6,7 +6,7 @@
 #include <unordered_map>
 
 // 前向声明
-class ProcessManager;
+class MemoryManager;
 
 struct PatternByte {
     bool isWildcard;
@@ -20,14 +20,16 @@ public:
     PatternScanner();
     ~PatternScanner();
 
-    // 设置进程管理器（用于跨进程扫描）
-    void SetProcessManager(ProcessManager* pm) { m_processManager = pm; }
+    // 设置内存管理器（用于跨进程扫描）
+    void SetProcessManager(MemoryManager* mm) { m_memoryManager = mm; }
 
     // 扫描模块中的特征码
     uintptr_t ScanModule(const std::string& moduleName, const std::string& pattern);
 
     // 获取捕获的变量
-    std::unordered_map<std::string, std::vector<uint8_t>> GetCapturedVariables() const { return m_capturedVariables; }
+    std::unordered_map<std::string, std::vector<uint8_t>> GetCapturedVariables() const {
+        return m_capturedVariables;
+    }
 
     // 清空捕获的变量
     void ClearCapturedVariables() { m_capturedVariables.clear(); }
@@ -42,6 +44,5 @@ private:
     // 捕获的变量数据
     std::unordered_map<std::string, std::vector<uint8_t>> m_capturedVariables;
 
-    // 进程管理器（可选，用于跨进程）
-    ProcessManager* m_processManager;
+    MemoryManager* m_memoryManager;
 };
