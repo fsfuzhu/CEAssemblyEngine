@@ -83,21 +83,34 @@ if (trainer.AttachToGame("game.exe")) {
 ## 文件结构
 
 ```
-CEAssembly/
-├── Core/
-│   ├── CEAssemblyEngine.h/cpp    # 主引擎
-│   ├── CEScript.h/cpp            # 脚本类
-│   └── MemoryManager.h/cpp       # 统一的内存管理
-├── Parser/
-│   └── CEScriptParser.h/cpp      # 脚本解析器
-├── Scanner/
-│   └── PatternScanner.h/cpp      # 特征码扫描
-├── Symbol/
-│   └── SymbolManager.h/cpp       # 符号管理
-├── Utils/
-│   ├── StringUtils.h             # 字符串工具
-│   └── DebugHelper.h/cpp         # 调试辅助
-└── CEAssembly.h                  # 统一包含文件
+CEAssemblerEngine/
+├── main.cpp
+├── README.md
+├── include/
+│   └── keystone/                # Keystone 头文件
+├── lib/                         # Keystone 静态 / 动态库
+└── CEAssembly/                  # 代码核心目录
+    ├── Core/
+    │   ├── CEAssemblyEngine.h
+    │   ├── CEAssemblyEngine.cpp
+    │   ├── CEScript.h
+    │   ├── CEScript.cpp
+    │   ├── MemoryManager.h
+    │   └── MemoryManager.cpp
+    ├── Parser/
+    │   ├── CEScriptParser.h
+    │   └── CEScriptParser.cpp
+    ├── Scanner/
+    │   ├── PatternScanner.h
+    │   └── PatternScanner.cpp
+    ├── Symbol/
+    │   ├── SymbolManager.h
+    │   └── SymbolManager.cpp
+    ├── Utils/
+    │   ├── StringUtils.h
+    │   ├── DebugHelper.h
+    │   └── DebugHelper.cpp
+    └── CEAssembly.h             # 对外统一包含文件
 ```
 
 ## 编译依赖
