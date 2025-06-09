@@ -147,6 +147,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
             break;
 
         case CommandType::ASSEMBLY:
+        {
             // 检查是否是标签定义
             if (line.back() == ':') {
                 // 如果有之前收集的代码，先汇编
@@ -192,55 +193,99 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
                     AddPatch(m_currentAddress, originalBytes, machineCode);
 
                     m_currentAddress += machineCode.size();
+                    codeLines.clear();
                 }
 
-                codeLines.clear();
+                // 处理新标签
+                std::string labelName = line.substr(0, line.length() - 1);
+                uintptr_t addr;
+                if (m_symbolManager->GetSymbolAddress(labelName, addr)) {
+                    m_currentAddress = addr;
+                    m_currentLabel = labelName;
+                }
             }
-
-            // 处理新标签
-            std::string labelName = line.substr(0, line.length() - 1);
-            uintptr_t addr;
-            if (m_symbolManager->GetSymbolAddress(labelName, addr)) {
-                m_currentAddress = addr;
-                m_currentLabel = labelName;
-            }
-        }
- else {
-            // 收集汇编代码
-            codeLines.push_back(line);
+            else {
+                // 收集汇编代码
+                codeLines.push_back(line);
             }
             break;
+        }
 
-            default:
-                break;
-    }
-}
-
-// 处理剩余的代码
-if (!codeLines.empty() && m_currentAddress != 0) {
-    std::vector<uint8_t> machineCode;
-    if (!AssembleCode(codeLines, m_currentAddress, machineCode)) {
-        return false;
+        default:
+            break;
+        }
     }
 
-    // 保存原始字节
-    std::vector<uint8_t> originalBytes(machineCode.size());
-    memcpy(originalBytes.data(), reinterpret_cast<void*>(m_currentAddress), machineCode.size());
+    // 处理剩余的代码
+    if (!codeLines.empty() && m_currentAddress != 0) {
+        std::vector<uint8_t> machineCode;
+        if (!AssembleCode(codeLines, m_currentAddress, machineCode)) {
+            return false;
+        }
 
-    DWORD oldProtect;
-    if (VirtualProtect(reinterpret_cast<LPVOID>(m_currentAddress),
-        machineCode.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        memcpy(reinterpret_cast<void*>(m_currentAddress), machineCode.data(), machineCode.size());
-        VirtualProtect(reinterpret_cast<LPVOID>(m_currentAddress),
-            machineCode.size(), oldProtect, &oldProtect);
+        // 保存原始字节
+        std::vector<uint8_t> originalBytes(machineCode.size());
+
+        if (m_isExternal) {
+            // 跨进程读取
+            m_processManager->ReadMemory(m_currentAddress, originalBytes.data(), machineCode.size());
+        }
+        else {
+            // 本进程读取
+            memcpy(originalBytes.data(), reinterpret_cast<void*>(m_currentAddress), machineCode.size());
+        }
+
+        // 写入机器码
+        if (m_isExternal) {
+            // 跨进程写入
+            DWORD oldProtect;
+            if (m_processManager->ProtectMemory(m_currentAddress, machineCode.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+                m_processManager->WriteMemory(m_currentAddress, machineCode.data(), machineCode.size());
+                m_processManager->ProtectMemory(m_currentAddress, machineCode.size(), oldProtect, &oldProtect);
+            }
+        }
+        else {
+            // 本进程写入
+            DWORD oldProtect;
+            if (VirtualProtect(reinterpret_cast<LPVOID>(m_currentAddress),
+                machineCode.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+                memcpy(reinterpret_cast<void*>(m_currentAddress), machineCode.data(), machineCode.size());
+                VirtualProtect(reinterpret_cast<LPVOID>(m_currentAddress),
+                    machineCode.size(), oldProtect, &oldProtect);
+            }
+        }
 
         // 记录补丁
         AddPatch(m_currentAddress, originalBytes, machineCode);
     }
+
+    if (!codeLines.empty() && m_currentAddress != 0) {
+        std::vector<uint8_t> machineCode;
+        if (!AssembleCode(codeLines, m_currentAddress, machineCode)) {
+            return false;
+        }
+
+        // 保存原始字节
+        std::vector<uint8_t> originalBytes(machineCode.size());
+        memcpy(originalBytes.data(), reinterpret_cast<void*>(m_currentAddress), machineCode.size());
+
+        DWORD oldProtect;
+        if (VirtualProtect(reinterpret_cast<LPVOID>(m_currentAddress),
+            machineCode.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            memcpy(reinterpret_cast<void*>(m_currentAddress), machineCode.data(), machineCode.size());
+            VirtualProtect(reinterpret_cast<LPVOID>(m_currentAddress),
+                machineCode.size(), oldProtect, &oldProtect);
+
+            // 记录补丁
+            AddPatch(m_currentAddress, originalBytes, machineCode);
+        }
+    }
+
+    return true;
 }
 
-return true;
-}
+// 处理剩余的代码
+
 
 bool CEAssemblyEngine::ProcessAobScanModule(const std::string& line) {
     ParsedCommand cmd = m_parser->ParseLine(line);

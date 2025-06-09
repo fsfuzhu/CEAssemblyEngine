@@ -144,7 +144,11 @@ MODULEENTRY32 ProcessManager::GetModuleInfo(const std::string& moduleName) {
 
     if (Module32First(hSnap, &modEntry)) {
         do {
-            std::string modName = modEntry.szModule;
+            // 转换 WCHAR 到 std::string
+            char modNameA[256];
+            WideCharToMultiByte(CP_UTF8, 0, modEntry.szModule, -1, modNameA, sizeof(modNameA), NULL, NULL);
+            std::string modName = modNameA;
+
             std::transform(modName.begin(), modName.end(), modName.begin(), ::tolower);
             std::string searchName = moduleName;
             std::transform(searchName.begin(), searchName.end(), searchName.begin(), ::tolower);
@@ -175,7 +179,11 @@ std::vector<ProcessInfo> ProcessManager::EnumerateProcesses() {
         do {
             ProcessInfo info;
             info.pid = procEntry.th32ProcessID;
-            info.name = procEntry.szExeFile;
+
+            // 转换 WCHAR 到 std::string
+            char exeFileA[MAX_PATH];
+            WideCharToMultiByte(CP_UTF8, 0, procEntry.szExeFile, -1, exeFileA, sizeof(exeFileA), NULL, NULL);
+            info.name = exeFileA;
 
             // 尝试获取完整路径
             HANDLE hProc = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, info.pid);

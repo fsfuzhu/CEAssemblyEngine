@@ -11,6 +11,8 @@ class SymbolManager;
 class PatternScanner;
 class MemoryAllocator;
 class CEScriptParser;
+class CEScript;
+class ProcessManager;
 
 // 脚本块类型
 enum class BlockType {
@@ -42,9 +44,6 @@ struct WildcardCapture {
     size_t size;
 };
 
-// 前向声明
-class CEScript;
-
 // 补丁信息
 struct PatchInfo {
     uintptr_t address;
@@ -58,6 +57,13 @@ public:
     CEAssemblyEngine();
     ~CEAssemblyEngine();
 
+    // 目标进程管理
+    bool AttachToProcess(DWORD pid);
+    bool AttachToProcess(const std::string& processName);
+    void DetachFromProcess();
+    bool IsAttached() const;
+    DWORD GetTargetPID() const;
+
     // 创建新脚本
     std::shared_ptr<CEScript> CreateScript(const std::string& name = "");
 
@@ -69,6 +75,9 @@ public:
 
     // 获取符号管理器（高级用法）
     SymbolManager* GetSymbolManager() { return m_symbolManager.get(); }
+
+    // 获取进程管理器（高级用法）
+    ProcessManager* GetProcessManager() { return m_processManager.get(); }
 
     // 友元类，允许CEScript访问私有方法
     friend class CEScript;
@@ -102,6 +111,7 @@ private:
     std::string ReplaceSymbols(const std::string& line);
 
     // 成员变量
+    std::unique_ptr<ProcessManager> m_processManager;
     std::unique_ptr<SymbolManager> m_symbolManager;
     std::unique_ptr<PatternScanner> m_patternScanner;
     std::unique_ptr<MemoryAllocator> m_memoryAllocator;
@@ -110,6 +120,7 @@ private:
     ks_engine* m_ksEngine;
     std::string m_lastError;
     std::string m_targetModule;
+    bool m_isExternal;  // 是否是外部进程
 
     // 当前脚本上下文
     CEScript* m_currentScript;
@@ -127,6 +138,3 @@ private:
     // 添加补丁记录
     void AddPatch(uintptr_t address, const std::vector<uint8_t>& originalBytes, const std::vector<uint8_t>& newBytes);
 };
-
-// 包含CEScript定义
-#include "CEScript.h"
