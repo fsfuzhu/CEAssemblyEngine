@@ -1,44 +1,38 @@
-// CEScriptParser.h
+// CEScriptParser.h - CE脚本解析器
 #pragma once
 #include <string>
 #include <vector>
-#include <regex>
 
-enum class CommandType {
-    AOBSCANMODULE,
-    ALLOC,
-    LABEL,
-    REGISTERSYMBOL,
-    UNREGISTERSYMBOL,
-    DEALLOC,
-    DB,
-    ASSEMBLY,
-    UNKNOWN
-};
-
-struct ParsedCommand {
-    CommandType type;
-    std::vector<std::string> parameters;
-    std::string rawLine;
-};
+// 前向声明
+struct ParsedCommand;
+enum class CommandType;
 
 class CEScriptParser {
 public:
-    // 解析脚本，分离ENABLE和DISABLE块
-    void ParseScript(const std::string& script,
-        std::vector<std::string>& enableBlock,
-        std::vector<std::string>& disableBlock);
+    CEScriptParser();
+    ~CEScriptParser();
 
-    // 解析单行命令
+    // 解析脚本内容
+    bool ParseScript(const std::string& content);
+
+    // 获取解析后的块
+    std::vector<std::string> GetEnableBlock() const { return m_enableBlock; }
+    std::vector<std::string> GetDisableBlock() const { return m_disableBlock; }
+
+    // 解析单行命令（由CEAssemblyEngine使用）
     ParsedCommand ParseLine(const std::string& line);
 
-    // 清理行（去除注释和空白）
-    std::string CleanLine(const std::string& line);
-
-    // 判断是否是汇编指令
-    bool IsAssemblyInstruction(const std::string& line);
+    // 清空解析结果
+    void Clear();
 
 private:
-    // 分割参数
-    std::vector<std::string> SplitParameters(const std::string& params);
+    // 解析后的块
+    std::vector<std::string> m_enableBlock;
+    std::vector<std::string> m_disableBlock;
+
+    // 处理行
+    std::string ProcessLine(const std::string& line);
+
+    // 判断命令类型
+    CommandType GetCommandType(const std::string& line);
 };

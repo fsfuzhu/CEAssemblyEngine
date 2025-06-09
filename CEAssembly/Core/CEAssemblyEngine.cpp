@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <regex>
 
 CEAssemblyEngine::CEAssemblyEngine()
 	: m_memoryManager(std::make_unique<MemoryManager>())

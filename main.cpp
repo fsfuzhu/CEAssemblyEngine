@@ -10,27 +10,28 @@ int main() {
     // 按照用户详细说明的脚本示例
     std::string scriptContent = R"(
 [ENABLE]
-aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10)
+
+aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
 alloc(newmem,$1000,INJECT)
+
 label(code)
 label(return)
 
 newmem:
 mov rax,#123
-
 code:
   mov rdx,[rax+r10]
-  mov rax,[rbx+10]
+  mov rax,[rbx+$10]
   jmp return
 
 INJECT:
   jmp newmem
   nop 3
 return:
-
 registersymbol(INJECT)
 
 [DISABLE]
+
 INJECT:
   db 4A 8B 14 10 48 8B 43 10
 

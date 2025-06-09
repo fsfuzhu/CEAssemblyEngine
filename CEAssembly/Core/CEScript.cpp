@@ -32,7 +32,7 @@ bool CEScript::Load(const std::string& scriptContent) {
         m_name.c_str(), m_enableBlock.size(), m_disableBlock.size());
     // 使用解析器分离ENABLE和DISABLE块
     CEScriptParser parser;
-    parser.ParseScript(scriptContent, m_enableBlock, m_disableBlock);
+    parser.ParseScript(scriptContent);
 
     if (m_enableBlock.empty() && m_disableBlock.empty()) {
         m_lastError = "No valid [ENABLE] or [DISABLE] blocks found";

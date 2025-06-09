@@ -1,195 +1,149 @@
-// CEScriptParser.cpp
+// CEScriptParser.cpp - CE脚本解析器实现
+#include "Core/CEAssemblyEngine.h"
 #include "CEScriptParser.h"
-#include <algorithm>
+#include "Utils/DebugHelper.h"
 #include <sstream>
+#include <algorithm>
+#include <regex>
 
-void CEScriptParser::ParseScript(const std::string& script,
-    std::vector<std::string>& enableBlock,
-    std::vector<std::string>& disableBlock) {
-    std::istringstream iss(script);
+CEScriptParser::CEScriptParser() {}
+CEScriptParser::~CEScriptParser() {}
+
+bool CEScriptParser::ParseScript(const std::string& content) {
+    Clear();
+
+    std::istringstream stream(content);
     std::string line;
     bool inEnableBlock = false;
     bool inDisableBlock = false;
 
-    while (std::getline(iss, line)) {
-        std::string cleanedLine = CleanLine(line);
-        if (cleanedLine.empty()) continue;
+    while (std::getline(stream, line)) {
+        // 处理行：去除空白和注释
+        line = ProcessLine(line);
+        if (line.empty()) continue;
 
-        // 转换为大写进行比较
-        std::string upperLine = cleanedLine;
-        std::transform(upperLine.begin(), upperLine.end(), upperLine.begin(), ::toupper);
-
-        if (upperLine == "[ENABLE]") {
+        // 检查块标记
+        if (line == "[ENABLE]") {
             inEnableBlock = true;
             inDisableBlock = false;
+            continue;
         }
-        else if (upperLine == "[DISABLE]") {
+        else if (line == "[DISABLE]") {
             inEnableBlock = false;
             inDisableBlock = true;
+            continue;
         }
-        else if (inEnableBlock) {
-            enableBlock.push_back(cleanedLine);
+
+        // 添加到相应的块
+        if (inEnableBlock) {
+            m_enableBlock.push_back(line);
         }
         else if (inDisableBlock) {
-            disableBlock.push_back(cleanedLine);
+            m_disableBlock.push_back(line);
         }
     }
-}
 
-std::string CEScriptParser::CleanLine(const std::string& line) {
-    std::string result = line;
-
-    // 移除注释
-    size_t commentPos = result.find("//");
-    if (commentPos != std::string::npos) {
-        result = result.substr(0, commentPos);
-    }
-
-    // 去除首尾空白
-    size_t start = result.find_first_not_of(" \t\r\n");
-    size_t end = result.find_last_not_of(" \t\r\n");
-
-    if (start == std::string::npos) {
-        return "";
-    }
-
-    return result.substr(start, end - start + 1);
+    return !m_enableBlock.empty();
 }
 
 ParsedCommand CEScriptParser::ParseLine(const std::string& line) {
     ParsedCommand cmd;
     cmd.rawLine = line;
+    cmd.type = GetCommandType(line);
 
-    // 检查是否是标签定义（以冒号结尾）
-    if (!line.empty() && line.back() == ':') {
-        cmd.type = CommandType::ASSEMBLY;  // 标签定义作为汇编指令处理
-        cmd.parameters.push_back(line);
-        return cmd;
-    }
+    // 提取参数
+    std::istringstream iss(line);
+    std::string token;
+    bool firstToken = true;
 
-    // 找到第一个括号的位置
-    size_t openParen = line.find('(');
-    size_t closeParen = line.find_last_of(')');
-
-    if (openParen != std::string::npos && closeParen != std::string::npos && closeParen > openParen) {
-        // 这是一个函数调用
-        std::string funcName = line.substr(0, openParen);
-        std::string params = line.substr(openParen + 1, closeParen - openParen - 1);
-
-        // 清理函数名
-        funcName = CleanLine(funcName);
-
-        // 转换函数名为大写
-        std::transform(funcName.begin(), funcName.end(), funcName.begin(), ::toupper);
-
-        // 确定命令类型
-        if (funcName == "AOBSCANMODULE") {
-            cmd.type = CommandType::AOBSCANMODULE;
+    while (iss >> token) {
+        if (firstToken) {
+            firstToken = false;
+            // 第一个token是命令本身（除了汇编指令）
+            if (cmd.type != CommandType::ASSEMBLY) {
+                continue;
+            }
         }
-        else if (funcName == "ALLOC") {
-            cmd.type = CommandType::ALLOC;
-        }
-        else if (funcName == "LABEL") {
-            cmd.type = CommandType::LABEL;
-        }
-        else if (funcName == "REGISTERSYMBOL") {
-            cmd.type = CommandType::REGISTERSYMBOL;
-        }
-        else if (funcName == "UNREGISTERSYMBOL") {
-            cmd.type = CommandType::UNREGISTERSYMBOL;
-        }
-        else if (funcName == "DEALLOC") {
-            cmd.type = CommandType::DEALLOC;
+
+        // 处理括号
+        if (token.find('(') != std::string::npos) {
+            size_t start = token.find('(');
+            size_t end = line.find(')', start);
+            if (end != std::string::npos) {
+                std::string params = line.substr(start + 1, end - start - 1);
+                std::istringstream paramStream(params);
+                std::string param;
+                while (std::getline(paramStream, param, ',')) {
+                    // 去除空白
+                    param.erase(0, param.find_first_not_of(" \t"));
+                    param.erase(param.find_last_not_of(" \t") + 1);
+                    if (!param.empty()) {
+                        cmd.parameters.push_back(param);
+                    }
+                }
+                break;
+            }
         }
         else {
-            cmd.type = CommandType::UNKNOWN;
-        }
-
-        // 分割参数
-        cmd.parameters = SplitParameters(params);
-    }
-    else {
-        // 检查是否是db指令
-        std::string upperLine = line;
-        std::transform(upperLine.begin(), upperLine.end(), upperLine.begin(), ::toupper);
-
-        if (upperLine.length() >= 3 && upperLine.substr(0, 3) == "DB ") {
-            cmd.type = CommandType::DB;
-            cmd.parameters.push_back(line.substr(3));
-        }
-        else if (IsAssemblyInstruction(line)) {
-            cmd.type = CommandType::ASSEMBLY;
-            cmd.parameters.push_back(line);
-        }
-        else {
-            cmd.type = CommandType::UNKNOWN;
+            cmd.parameters.push_back(token);
         }
     }
 
     return cmd;
 }
 
-std::vector<std::string> CEScriptParser::SplitParameters(const std::string& params) {
-    std::vector<std::string> result;
-    std::string current;
-    bool inQuotes = false;
-
-    for (char c : params) {
-        if (c == '"') {
-            inQuotes = !inQuotes;
-        }
-        else if (c == ',' && !inQuotes) {
-            // 去除参数首尾空白
-            std::string trimmed = CleanLine(current);
-            if (!trimmed.empty()) {
-                result.push_back(trimmed);
-            }
-            current.clear();
-        }
-        else {
-            current += c;
-        }
-    }
-
-    // 添加最后一个参数
-    if (!current.empty()) {
-        std::string trimmed = CleanLine(current);
-        if (!trimmed.empty()) {
-            result.push_back(trimmed);
-        }
-    }
-
-    return result;
+void CEScriptParser::Clear() {
+    m_enableBlock.clear();
+    m_disableBlock.clear();
 }
 
-bool CEScriptParser::IsAssemblyInstruction(const std::string& line) {
-    // 常见的汇编指令前缀
-    static const std::vector<std::string> asmInstructions = {
-        "MOV", "LEA", "PUSH", "POP", "CALL", "JMP", "JE", "JNE", "JZ", "JNZ",
-        "ADD", "SUB", "XOR", "AND", "OR", "CMP", "TEST", "NOP", "RET",
-        "INC", "DEC", "MUL", "DIV", "SHL", "SHR", "ROL", "ROR",
-        "JG", "JGE", "JL", "JLE", "JA", "JAE", "JB", "JBE"
-    };
+std::string CEScriptParser::ProcessLine(const std::string& line) {
+    // 去除注释
+    size_t commentPos = line.find("//");
+    std::string processed = (commentPos != std::string::npos) ? line.substr(0, commentPos) : line;
 
-    std::string upperLine = line;
-    std::transform(upperLine.begin(), upperLine.end(), upperLine.begin(), ::toupper);
+    // 去除前后空白
+    processed.erase(0, processed.find_first_not_of(" \t\r\n"));
+    processed.erase(processed.find_last_not_of(" \t\r\n") + 1);
+
+    return processed;
+}
+
+CommandType CEScriptParser::GetCommandType(const std::string& line) {
+    if (line.empty()) return CommandType::UNKNOWN;
 
     // 标签定义（以冒号结尾）
-    if (!line.empty() && line.back() == ':') {
-        return true;
+    if (line.back() == ':') {
+        return CommandType::ASSEMBLY;  // 标签是特殊的汇编指令
     }
 
-    // 检查是否以汇编指令开始
-    for (const auto& instruction : asmInstructions) {
-        if (upperLine.find(instruction) == 0) {
-            // 确保后面是空格、制表符或字符串结尾
-            if (upperLine.length() == instruction.length() ||
-                upperLine[instruction.length()] == ' ' ||
-                upperLine[instruction.length()] == '\t') {
-                return true;
-            }
-        }
+    // 提取命令名
+    std::string command;
+    size_t spacePos = line.find(' ');
+    size_t parenPos = line.find('(');
+
+    if (parenPos != std::string::npos && (spacePos == std::string::npos || parenPos < spacePos)) {
+        command = line.substr(0, parenPos);
+    }
+    else if (spacePos != std::string::npos) {
+        command = line.substr(0, spacePos);
+    }
+    else {
+        command = line;
     }
 
-    return false;
+    // 转换为小写
+    std::transform(command.begin(), command.end(), command.begin(), ::tolower);
+
+    // 匹配命令类型
+    if (command == "aobscanmodule") return CommandType::AOBSCANMODULE;
+    if (command == "alloc") return CommandType::ALLOC;
+    if (command == "label") return CommandType::LABEL;
+    if (command == "registersymbol") return CommandType::REGISTERSYMBOL;
+    if (command == "unregistersymbol") return CommandType::UNREGISTERSYMBOL;
+    if (command == "dealloc") return CommandType::DEALLOC;
+    if (command == "db") return CommandType::DB;
+
+    // 默认为汇编指令
+    return CommandType::ASSEMBLY;
 }
