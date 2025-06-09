@@ -10,32 +10,29 @@ int main() {
     // 按照用户详细说明的脚本示例
     std::string scriptContent = R"(
 [ENABLE]
-
-aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
-alloc(newmem,$1000,INJECT)
+aobscanmodule(fuckTest,Notepad.exe,41 81 F2 69 6E 65 49) // should be unique
+alloc(newmem,$1000,fuckTest)
 
 label(code)
 label(return)
 
 newmem:
-mov rax,#123
+
 code:
-  mov rdx,[rax+r10]
-  mov rax,[rbx+$10]
+  xor r10d,49656E69
   jmp return
 
-INJECT:
+fuckTest:
   jmp newmem
-  nop 3
+  nop 2
 return:
-registersymbol(INJECT)
+registersymbol(fuckTest)
 
 [DISABLE]
+fuckTest:
+  db 41 81 F2 69 6E 65 49
 
-INJECT:
-  db 4A 8B 14 10 48 8B 43 10
-
-unregistersymbol(INJECT)
+unregistersymbol(fuckTest)
 dealloc(newmem)
 )";
 
