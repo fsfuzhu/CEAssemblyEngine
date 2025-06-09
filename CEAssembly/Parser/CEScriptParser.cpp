@@ -18,7 +18,7 @@ bool CEScriptParser::ParseScript(const std::string& content) {
     bool inDisableBlock = false;
 
     while (std::getline(stream, line)) {
-        // 处理行：去除空白和注释
+        // 处理行：去掉注释和空白
         line = ProcessLine(line);
         if (line.empty()) continue;
 
@@ -51,40 +51,55 @@ ParsedCommand CEScriptParser::ParseLine(const std::string& line) {
     cmd.rawLine = line;
     cmd.type = GetCommandType(line);
 
-    // 提取参数
-    std::istringstream iss(line);
-    std::string token;
-    bool firstToken = true;
+    // 如果是带括号的命令，特殊处理
+    size_t parenPos = line.find('(');
+    if (parenPos != std::string::npos) {
+        // 提取命令名
+        std::string commandName = line.substr(0, parenPos);
+        // 去除空白
+        commandName.erase(0, commandName.find_first_not_of(" \t"));
+        commandName.erase(commandName.find_last_not_of(" \t") + 1);
 
-    while (iss >> token) {
-        if (firstToken) {
-            firstToken = false;
-            // 第一个token是命令本身（除了汇编指令）
-            if (cmd.type != CommandType::ASSEMBLY) {
-                continue;
-            }
-        }
+        // 查找匹配的右括号
+        size_t endParen = line.find(')', parenPos);
+        if (endParen != std::string::npos) {
+            // 提取括号内的参数
+            std::string params = line.substr(parenPos + 1, endParen - parenPos - 1);
 
-        // 处理括号
-        if (token.find('(') != std::string::npos) {
-            size_t start = token.find('(');
-            size_t end = line.find(')', start);
-            if (end != std::string::npos) {
-                std::string params = line.substr(start + 1, end - start - 1);
-                std::istringstream paramStream(params);
-                std::string param;
-                while (std::getline(paramStream, param, ',')) {
-                    // 去除空白
-                    param.erase(0, param.find_first_not_of(" \t"));
-                    param.erase(param.find_last_not_of(" \t") + 1);
-                    if (!param.empty()) {
-                        cmd.parameters.push_back(param);
-                    }
+            // 按逗号分割参数
+            std::istringstream paramStream(params);
+            std::string param;
+
+            while (std::getline(paramStream, param, ',')) {
+                // 去除空白
+                param.erase(0, param.find_first_not_of(" \t"));
+                param.erase(param.find_last_not_of(" \t") + 1);
+                if (!param.empty()) {
+                    cmd.parameters.push_back(param);
                 }
-                break;
+            }
+
+            LOG_DEBUG_F("Parsed command '%s' with %zu parameters",
+                commandName.c_str(), cmd.parameters.size());
+            for (size_t i = 0; i < cmd.parameters.size(); ++i) {
+                LOG_DEBUG_F("  param[%zu] = '%s'", i, cmd.parameters[i].c_str());
             }
         }
-        else {
+    }
+    else {
+        // 没有括号的命令，按空格分割
+        std::istringstream iss(line);
+        std::string token;
+        bool firstToken = true;
+
+        while (iss >> token) {
+            if (firstToken) {
+                firstToken = false;
+                // 第一个token是命令本身，汇编指令需要保留
+                if (cmd.type != CommandType::ASSEMBLY) {
+                    continue;
+                }
+            }
             cmd.parameters.push_back(token);
         }
     }

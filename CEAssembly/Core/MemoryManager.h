@@ -58,6 +58,7 @@ private:
     // 内部方法
     MODULEENTRY32 GetModuleInfo(const std::string& moduleName);
     uintptr_t AllocateMemoryInternal(size_t size, uintptr_t nearAddress = 0);
+    uintptr_t SearchMemoryRange(uintptr_t startAddr, uintptr_t endAddr, size_t allocSize, bool upward);
     bool FreeMemoryInternal(uintptr_t address);
     uintptr_t FindSuitableAddress(uintptr_t nearAddress, size_t size);
 };

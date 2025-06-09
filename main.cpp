@@ -39,25 +39,6 @@ unregistersymbol(INJECT)
 dealloc(newmem)
 )";
 
-    std::cout << "=== 简化版API使用示例 ===\n";
-    std::cout << "修复内容：\n";
-    std::cout << "1. 移除复杂的跳转表逻辑\n";
-    std::cout << "2. 按照CE脚本执行流程实现\n";
-    std::cout << "3. 修复符号替换，避免送给Keystone\n";
-    std::cout << "4. 优化内存分配，尝试低位地址\n";
-    std::cout << "5. 实现延迟处理前向引用\n\n";
-
-    std::cout << "预期执行流程：\n";
-    std::cout << "1. INJECT = 0x7FF775692E0A (aobscan结果)\n";
-    std::cout << "2. alloc(newmem,$1000,INJECT) -> 在INJECT附近申请\n";
-    std::cout << "3. 如果距离在E9范围内 -> 使用E9跳转\n";
-    std::cout << "4. 如果距离太远 -> 重新申请低位地址 + FF25跳转\n";
-    std::cout << "5. newmem: mov rax,#123 -> 48 C7 C0 23 01 00 00 (7字节)\n";
-    std::cout << "6. code: = 当前地址\n";
-    std::cout << "7. INJECT: jmp newmem -> E9或FF25跳转\n";
-    std::cout << "8. return: = INJECT + 跳转指令长度 + nop 3\n";
-    std::cout << "9. 延迟处理: jmp return -> E9跳转到正确地址\n\n";
-
     // 创建引擎
     CEAssemblyEngine engine;
 
@@ -80,7 +61,6 @@ dealloc(newmem)
             if (script->Enable()) {
                 std::cout << "✓ 脚本启用成功！" << std::endl;
                 std::cout << "\n脚本执行流程：" << std::endl;
-                std::cout << "INJECT (高地址) -> 跳转表 -> newmem (低地址) -> return (高地址)" << std::endl;
                 std::cout << "\n按任意键禁用脚本..." << std::endl;
                 std::cin.get();
 

@@ -273,44 +273,138 @@ uintptr_t MemoryManager::AllocateMemoryInternal(size_t size, uintptr_t nearAddre
     // 对齐到页边界
     size_t allocSize = (size + 0xFFF) & ~0xFFF;
 
+    LOG_DEBUG_F("Attempting to allocate %zu bytes near 0x%llX", allocSize, nearAddress);
+
     if (nearAddress != 0) {
-        // 尝试在附近地址分配（用于跳转）
-        const size_t searchRange = 0x7FFFFFFF;  // 2GB
-        uintptr_t minAddr = (nearAddress > searchRange) ? nearAddress - searchRange : 0x10000;
-        uintptr_t maxAddr = nearAddress + searchRange;
+        // 策略1: 优先在目标地址附近的小范围内搜索（±512MB）
+        const std::vector<size_t> searchRanges = {
+            0x20000000,   // ±512MB
+            0x40000000,   // ±1GB  
+            0x60000000,   // ±1.5GB
+            0x7FFFFFFF    // ±2GB (E9最大范围)
+        };
 
-        // 搜索可用内存
-        MEMORY_BASIC_INFORMATION mbi;
-        uintptr_t currentAddr = minAddr;
+        for (size_t searchRange : searchRanges) {
+            LOG_DEBUG_F("Searching in range ±%zu MB", searchRange / (1024 * 1024));
 
-        while (currentAddr < maxAddr) {
-            if (VirtualQueryEx(m_hProcess, reinterpret_cast<LPCVOID>(currentAddr), &mbi, sizeof(mbi))) {
-                if (mbi.State == MEM_FREE && mbi.RegionSize >= allocSize) {
-                    LPVOID allocated = VirtualAllocEx(m_hProcess,
-                        reinterpret_cast<LPVOID>(currentAddr),
-                        allocSize,
-                        MEM_COMMIT | MEM_RESERVE,
-                        PAGE_EXECUTE_READWRITE);
-                    if (allocated) {
-                        return reinterpret_cast<uintptr_t>(allocated);
-                    }
-                }
-                currentAddr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+            // 计算搜索边界
+            uintptr_t minAddr = (nearAddress > searchRange) ? nearAddress - searchRange : 0x10000;
+            uintptr_t maxAddr = nearAddress + searchRange;
+
+            // 确保不超过用户空间
+            if (maxAddr > 0x7FFFFFFFFFFF) {
+                maxAddr = 0x7FFFFFFFFFFF;
             }
-            else {
-                currentAddr += 0x10000;
+
+            // 策略1a: 先向上搜索（地址增长方向）
+            uintptr_t result = SearchMemoryRange(nearAddress, maxAddr, allocSize, true);
+            if (result != 0) {
+                int64_t distance = static_cast<int64_t>(result) - static_cast<int64_t>(nearAddress);
+                LOG_INFO_F("Found memory above target: 0x%llX (distance: %lld bytes)", result, distance);
+                return result;
+            }
+
+            // 策略1b: 再向下搜索（地址减少方向）
+            result = SearchMemoryRange(minAddr, nearAddress, allocSize, false);
+            if (result != 0) {
+                int64_t distance = static_cast<int64_t>(result) - static_cast<int64_t>(nearAddress);
+                LOG_INFO_F("Found memory below target: 0x%llX (distance: %lld bytes)", result, distance);
+                return result;
             }
         }
+
+        LOG_WARN("Failed to find suitable memory in E9 range, trying system allocation");
     }
 
-    // 如果附近分配失败，使用默认分配
+    // 策略2: 系统默认分配
     LPVOID allocated = VirtualAllocEx(m_hProcess,
         nullptr,
         allocSize,
         MEM_COMMIT | MEM_RESERVE,
         PAGE_EXECUTE_READWRITE);
 
-    return reinterpret_cast<uintptr_t>(allocated);
+    uintptr_t result = reinterpret_cast<uintptr_t>(allocated);
+    if (result != 0) {
+        LOG_INFO_F("System allocated memory at: 0x%llX", result);
+    }
+
+    return result;
+}
+
+uintptr_t MemoryManager::SearchMemoryRange(uintptr_t startAddr, uintptr_t endAddr, size_t allocSize, bool upward) {
+    MEMORY_BASIC_INFORMATION mbi;
+    uintptr_t currentAddr = upward ? startAddr : endAddr - allocSize;
+    uintptr_t step = upward ? 0x10000 : -0x10000;  // 64KB步长
+
+    LOG_TRACE_F("Searching range 0x%llX - 0x%llX, direction: %s",
+        startAddr, endAddr, upward ? "up" : "down");
+
+    int attempts = 0;
+    const int maxAttempts = (endAddr - startAddr) / 0x10000;
+
+    while ((upward ? currentAddr < endAddr : currentAddr >= startAddr) && attempts++ < maxAttempts) {
+
+        // 查询内存状态
+        if (VirtualQueryEx(m_hProcess, reinterpret_cast<LPCVOID>(currentAddr), &mbi, sizeof(mbi))) {
+
+            // 检查是否是空闲内存且足够大
+            if (mbi.State == MEM_FREE && mbi.RegionSize >= allocSize) {
+
+                // 尝试在这个位置分配
+                uintptr_t allocAddr = upward ? currentAddr :
+                    (reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize - allocSize);
+
+                // 确保地址在搜索范围内
+                if (allocAddr >= startAddr && allocAddr + allocSize <= endAddr) {
+
+                    LPVOID allocated = VirtualAllocEx(m_hProcess,
+                        reinterpret_cast<LPVOID>(allocAddr),
+                        allocSize,
+                        MEM_COMMIT | MEM_RESERVE,
+                        PAGE_EXECUTE_READWRITE);
+
+                    if (allocated) {
+                        LOG_DEBUG_F("Successfully allocated at preferred address: 0x%llX", allocAddr);
+                        return allocAddr;
+                    }
+
+                    // 如果指定地址失败，尝试在这个空闲区域的任意位置分配
+                    allocated = VirtualAllocEx(m_hProcess,
+                        mbi.BaseAddress,
+                        allocSize,
+                        MEM_COMMIT | MEM_RESERVE,
+                        PAGE_EXECUTE_READWRITE);
+
+                    if (allocated) {
+                        uintptr_t actualAddr = reinterpret_cast<uintptr_t>(allocated);
+                        if (actualAddr >= startAddr && actualAddr + allocSize <= endAddr) {
+                            LOG_DEBUG_F("Successfully allocated in free region: 0x%llX", actualAddr);
+                            return actualAddr;
+                        }
+                        else {
+                            // 地址超出范围，释放并继续搜索
+                            VirtualFreeEx(m_hProcess, allocated, 0, MEM_RELEASE);
+                        }
+                    }
+                }
+            }
+
+            // 移动到下一个区域
+            if (upward) {
+                currentAddr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+            }
+            else {
+                currentAddr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) - 0x10000;
+            }
+        }
+        else {
+            // 查询失败，跳过
+            currentAddr += step;
+        }
+    }
+
+    LOG_TRACE_F("No suitable memory found in range (attempts: %d)", attempts);
+    return 0;
 }
 
 bool MemoryManager::FreeMemoryInternal(uintptr_t address) {

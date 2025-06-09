@@ -9,7 +9,9 @@
 #include <iomanip>
 #include <algorithm>
 #include <regex>
-
+#include <set>      // 新增：用于ContainsUnresolvedSymbols
+#include <map>      // 新增：用于ReplaceSymbols
+#include <cctype>   // 新增：用于std::isalpha
 CEAssemblyEngine::CEAssemblyEngine()
 	: m_memoryManager(std::make_unique<MemoryManager>())
 	, m_patternScanner(std::make_unique<PatternScanner>())
@@ -114,6 +116,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 	m_currentAddress = 0;
 
 	// 第一遍：处理命令，建立符号表
+	LOG_DEBUG("=== Pass 1: Processing commands ===");
 	for (const auto& line : lines) {
 		ParsedCommand cmd = m_parser->ParseLine(line);
 
@@ -151,11 +154,8 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 		}
 	}
 
-	// 第二遍：处理汇编代码
-	struct DelayedInstruction {
-		std::string instruction;
-		uintptr_t address;
-	};
+	// 第二遍：处理汇编指令和标签定义
+	LOG_DEBUG("=== Pass 2: Processing assembly and labels ===");
 	std::vector<DelayedInstruction> delayedInstructions;
 
 	for (const auto& line : lines) {
@@ -163,7 +163,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 
 		if (cmd.type == CommandType::ASSEMBLY) {
 			if (!line.empty() && line.back() == ':') {
-				// 标签定义，设置当前地址
+				// 标签定义
 				std::string labelName = line.substr(0, line.length() - 1);
 				uintptr_t addr = 0;
 
@@ -189,7 +189,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 				// 汇编指令
 				uintptr_t instructionAddress = m_currentAddress;
 				if (!ProcessAssemblyInstruction(line)) {
-					// 如果处理失败，可能是前向引用，添加到延迟处理
+					// 处理失败，添加到延迟列表
 					DelayedInstruction delayed;
 					delayed.instruction = line;
 					delayed.address = instructionAddress;
@@ -213,7 +213,8 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 		}
 	}
 
-	// 第三遍：处理延迟的指令（前向引用）
+	// 第三遍：处理延迟的指令（现在所有符号都应该已定义）
+	LOG_DEBUG("=== Pass 3: Processing delayed instructions ===");
 	for (const auto& delayed : delayedInstructions) {
 		uintptr_t savedAddress = m_currentAddress;
 		m_currentAddress = delayed.address;
@@ -228,6 +229,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 		m_currentAddress = savedAddress;
 	}
 
+	LOG_DEBUG("=== Enable block processing completed ===");
 	return true;
 }
 
@@ -236,6 +238,8 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		LOG_ERROR("Cannot process instruction without current address");
 		return false;
 	}
+
+	LOG_DEBUG_F("Processing instruction: %s", line.c_str());
 
 	// 处理特殊指令
 	std::istringstream iss(line);
@@ -255,20 +259,28 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		return WriteBytes(nopBytes);
 	}
 
-	// 检查是否包含符号跳转
+	// 检查是否是跳转指令且包含符号
 	if (op == "jmp" || op == "call" || op.find("j") == 0) {
 		std::string operand;
 		iss >> operand;
 
-		// 检查是否是我们的符号
-		uintptr_t targetAddr;
-		if (m_symbolManager->GetSymbolAddress(operand, targetAddr)) {
-			if (targetAddr != 0) {
-				// 符号已解析，生成跳转指令
-				return ProcessJumpInstruction(op, targetAddr);
+		// 检查操作数是否是符号（不是数字或寄存器）
+		if (!operand.empty() && std::isalpha(operand[0])) {
+			uintptr_t targetAddr;
+			if (m_symbolManager->GetSymbolAddress(operand, targetAddr)) {
+				if (targetAddr != 0) {
+					// 符号已解析，自己生成跳转指令
+					LOG_DEBUG_F("Jump to resolved symbol: %s -> 0x%llX", operand.c_str(), targetAddr);
+					return ProcessJumpInstruction(op, targetAddr);
+				}
+				else {
+					// 前向引用，延迟处理
+					LOG_DEBUG_F("Forward reference detected: %s %s", op.c_str(), operand.c_str());
+					return false;
+				}
 			}
 			else {
-				// 前向引用，尚未解析
+				LOG_ERROR_F("Unknown symbol: %s", operand.c_str());
 				return false;
 			}
 		}
@@ -276,6 +288,20 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 
 	// 替换符号后交给Keystone
 	std::string processedLine = ReplaceSymbols(line);
+	LOG_DEBUG_F("After symbol replacement: %s -> %s", line.c_str(), processedLine.c_str());
+
+	// 对于简单指令，不需要检查未解析符号，直接尝试汇编
+	if (op == "mov" || op == "add" || op == "sub" || op == "push" || op == "pop" ||
+		op == "inc" || op == "dec" || op == "nop" || op == "lea" || op == "cmp" || op == "test") {
+		LOG_DEBUG_F("Simple instruction, attempting direct assembly");
+	}
+	else {
+		// 检查替换后是否还有未解析的符号
+		if (ContainsUnresolvedSymbols(processedLine)) {
+			LOG_DEBUG_F("Instruction contains unresolved symbols, delaying: %s", processedLine.c_str());
+			return false; // 延迟处理
+		}
+	}
 
 	unsigned char* encode;
 	size_t size;
@@ -285,6 +311,7 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 	if (ks_asm(m_ksEngine, processedLine.c_str(), m_currentAddress, &encode, &size, &count) == KS_ERR_OK) {
 		std::vector<uint8_t> machineCode(encode, encode + size);
 		ks_free(encode);
+		LOG_DEBUG_F("Assembly successful: %zu bytes", size);
 		return WriteBytes(machineCode);
 	}
 	else {
@@ -292,6 +319,56 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 			ks_strerror(ks_errno(m_ksEngine)), processedLine.c_str());
 		return false;
 	}
+}
+
+bool CEAssemblyEngine::ContainsUnresolvedSymbols(const std::string& line) {
+	// 常见的寄存器名和指令，不应被视为符号
+	static const std::set<std::string> registers = {
+		"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp",
+		"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+		"eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
+		"ax", "bx", "cx", "dx", "si", "di", "sp", "bp",
+		"al", "bl", "cl", "dl", "ah", "bh", "ch", "dh",
+		// 添加常见指令
+		"mov", "add", "sub", "push", "pop", "call", "jmp",
+		"je", "jne", "jz", "jnz", "jg", "jl", "jge", "jle",
+		"inc", "dec", "nop", "ret", "lea", "cmp", "test"
+	};
+
+	std::regex symbolRegex(R"(\b([a-zA-Z_]\w*)\b)");
+	std::smatch match;
+	std::string temp = line;
+
+	LOG_TRACE_F("Checking unresolved symbols in: %s", line.c_str());
+
+	while (std::regex_search(temp, match, symbolRegex)) {
+		std::string symbol = match[1];
+		std::string lowerSymbol = symbol;
+		std::transform(lowerSymbol.begin(), lowerSymbol.end(), lowerSymbol.begin(), ::tolower);
+
+		LOG_TRACE_F("Found potential symbol: %s", symbol.c_str());
+
+		// 如果不是寄存器/指令且不是已知符号，则为未解析
+		if (registers.find(lowerSymbol) == registers.end()) {
+			uintptr_t addr;
+			uint64_t value;
+			if (!m_symbolManager->GetSymbolAddress(symbol, addr) &&
+				!m_symbolManager->GetCapturedValue(symbol, value)) {
+				LOG_DEBUG_F("Unresolved symbol found: %s", symbol.c_str());
+				return true;
+			}
+			else {
+				LOG_TRACE_F("Symbol %s is resolved", symbol.c_str());
+			}
+		}
+		else {
+			LOG_TRACE_F("Symbol %s is a register/instruction", symbol.c_str());
+		}
+
+		temp = match.suffix();
+	}
+
+	return false;
 }
 
 bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr) {
@@ -510,36 +587,91 @@ bool CEAssemblyEngine::ProcessRegisterSymbol(const std::string& line) {
 	// 这里可以实现全局符号注册逻辑
 	return true;
 }
-
 std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 	std::string result = line;
 
-	// 替换 #123 形式的立即数
-	std::regex immediateRegex(R"(#(\d+))");
-	result = std::regex_replace(result, immediateRegex, "0x$1");
+	LOG_TRACE_F("Symbol replacement input: %s", line.c_str());
 
-	// 查找并替换捕获的变量（但不替换普通符号）
+	// 1. 替换 CE 格式的十六进制 $XX -> 0xXX
+	std::regex dollarHexRegex(R"(\$([0-9A-Fa-f]+))");
+	result = std::regex_replace(result, dollarHexRegex, "0x$1");
+
+	// 2. 替换 #123 形式的立即数为十进制
+	std::regex immediateRegex(R"(#(\d+))");
+	result = std::regex_replace(result, immediateRegex, "$1");
+
+	// 3. 检查是否是跳转指令，如果是则不替换操作数中的符号
+	std::istringstream iss(result);
+	std::string op;
+	iss >> op;
+	std::transform(op.begin(), op.end(), op.begin(), ::tolower);
+
+	if (op == "jmp" || op == "call" || op.find("j") == 0) {
+		std::string operand;
+		iss >> operand;
+
+		// 如果操作数是符号（字母开头），不进行替换
+		if (!operand.empty() && std::isalpha(operand[0])) {
+			LOG_TRACE_F("Symbol replacement output: %s (jump target preserved)", result.c_str());
+			return result;
+		}
+	}
+
+	// 4. 替换所有其他符号
 	std::regex symbolRegex(R"(\b([a-zA-Z_]\w*)\b)");
 	std::smatch match;
 	std::string temp = result;
+	std::map<std::string, std::string> replacements;
 
 	while (std::regex_search(temp, match, symbolRegex)) {
 		std::string symbol = match[1];
-		uint64_t value;
+		std::string lowerSymbol = symbol;
+		std::transform(lowerSymbol.begin(), lowerSymbol.end(), lowerSymbol.begin(), ::tolower);
 
-		// 只替换捕获的变量，不替换普通符号
-		if (m_symbolManager->GetCapturedValue(symbol, value)) {
-			std::stringstream ss;
-			ss << "0x" << std::hex << value;
-			result = std::regex_replace(result, std::regex("\\b" + symbol + "\\b"), ss.str());
+		// 跳过寄存器和指令名
+		static const std::set<std::string> skipSymbols = {
+			"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp",
+			"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+			"eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
+			"ax", "bx", "cx", "dx", "si", "di", "sp", "bp",
+			"al", "bl", "cl", "dl", "ah", "bh", "ch", "dh",
+			"mov", "add", "sub", "push", "pop", "call", "jmp"
+		};
+
+		if (skipSymbols.find(lowerSymbol) != skipSymbols.end()) {
+			temp = match.suffix();
+			continue;
+		}
+
+		// 检查是否是捕获的变量
+		uint64_t capturedValue;
+		if (m_symbolManager->GetCapturedValue(symbol, capturedValue)) {
+			replacements[symbol] = std::to_string(capturedValue);
+			LOG_DEBUG_F("Symbol '%s' -> captured value %llu", symbol.c_str(), capturedValue);
+		}
+		// 检查是否是地址符号
+		else {
+			uintptr_t symbolAddr;
+			if (m_symbolManager->GetSymbolAddress(symbol, symbolAddr) && symbolAddr != 0) {
+				std::stringstream ss;
+				ss << "0x" << std::hex << symbolAddr;
+				replacements[symbol] = ss.str();
+				LOG_DEBUG_F("Symbol '%s' -> address 0x%llX", symbol.c_str(), symbolAddr);
+			}
 		}
 
 		temp = match.suffix();
 	}
 
+	// 应用所有替换
+	for (const auto& [symbol, replacement] : replacements) {
+		std::regex symbolPattern("\\b" + symbol + "\\b");
+		result = std::regex_replace(result, symbolPattern, replacement);
+	}
+
+	LOG_TRACE_F("Symbol replacement output: %s", result.c_str());
 	return result;
 }
-
 bool CEAssemblyEngine::ProcessDisableBlock(const std::vector<std::string>& lines) {
 	for (const auto& line : lines) {
 		ParsedCommand cmd = m_parser->ParseLine(line);
@@ -581,6 +713,48 @@ bool CEAssemblyEngine::ProcessDbCommand(const std::string& line) {
 		}
 	}
 	return false;
+}
+
+bool CEAssemblyEngine::ProcessAssemblyBatch(const std::vector<std::string>& instructions, uintptr_t startAddress) {
+	m_currentAddress = startAddress;
+
+	// 尝试批量汇编所有指令
+	std::string batchAssembly;
+	for (const auto& line : instructions) {
+		if (!batchAssembly.empty()) {
+			batchAssembly += "\n";
+		}
+		batchAssembly += ReplaceSymbols(line);
+	}
+
+	LOG_DEBUG_F("Batch assembly at 0x%llX (%zu instructions):", startAddress, instructions.size());
+	LOG_DEBUG_F("Batch content:\n%s", batchAssembly.c_str());
+
+	unsigned char* encode;
+	size_t size;
+	size_t count;
+
+	if (ks_asm(m_ksEngine, batchAssembly.c_str(), startAddress, &encode, &size, &count) == KS_ERR_OK) {
+		std::vector<uint8_t> machineCode(encode, encode + size);
+		ks_free(encode);
+
+		bool success = WriteBytes(machineCode);
+		LOG_DEBUG_F("Batch assembly result: %zu bytes, success=%d", size, success);
+		return success;
+	}
+	else {
+		// 批量失败，尝试逐条处理
+		LOG_WARN_F("Batch assembly failed (%s), trying individual instructions",
+			ks_strerror(ks_errno(m_ksEngine)));
+
+		m_currentAddress = startAddress;
+		for (const auto& line : instructions) {
+			if (!ProcessAssemblyInstruction(line)) {
+				return false;
+			}
+		}
+		return true;
+	}
 }
 
 bool CEAssemblyEngine::ProcessUnregisterSymbol(const std::string& line) {

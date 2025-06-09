@@ -28,11 +28,20 @@ bool CEScript::Load(const std::string& scriptContent) {
     // 清空之前的内容
     m_enableBlock.clear();
     m_disableBlock.clear();
-    LOG_INFO_F("Script \"%s\" loaded. ENABLE=%zu lines, DISABLE=%zu lines",
-        m_name.c_str(), m_enableBlock.size(), m_disableBlock.size());
+
     // 使用解析器分离ENABLE和DISABLE块
     CEScriptParser parser;
-    parser.ParseScript(scriptContent);
+    if (!parser.ParseScript(scriptContent)) {
+        m_lastError = "Failed to parse script content";
+        return false;
+    }
+
+    // 获取解析结果
+    m_enableBlock = parser.GetEnableBlock();
+    m_disableBlock = parser.GetDisableBlock();
+
+    LOG_INFO_F("Script \"%s\" loaded. ENABLE=%zu lines, DISABLE=%zu lines",
+        m_name.c_str(), m_enableBlock.size(), m_disableBlock.size());
 
     if (m_enableBlock.empty() && m_disableBlock.empty()) {
         m_lastError = "No valid [ENABLE] or [DISABLE] blocks found";
@@ -68,9 +77,10 @@ bool CEScript::Enable() {
 
     if (m_enabled) {
         m_lastError = "Script already enabled";
-        LOG_INFO_F("Enabling script \"%s\"", m_name.c_str());
         return false;
     }
+
+    LOG_INFO_F("Enabling script \"%s\"", m_name.c_str());
 
     // 清空之前的补丁信息
     m_patches.clear();
@@ -84,7 +94,9 @@ bool CEScript::Enable() {
         LOG_ERROR_F("Enable failed : %s", m_lastError.c_str());
         return false;
     }
+
     LOG_INFO("Enable success");
+
     // 获取所有的补丁信息
     m_patches = m_engine->GetPatches();
 

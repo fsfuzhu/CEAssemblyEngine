@@ -47,21 +47,21 @@ public:
     CEAssemblyEngine();
     ~CEAssemblyEngine();
 
-    // 目标进程管理
+    // 目标进程功能
     bool AttachToProcess(DWORD pid);
     bool AttachToProcess(const std::string& processName);
     void DetachFromProcess();
     bool IsAttached() const;
     DWORD GetTargetPID() const;
 
-    // 脚本管理
+    // 脚本功能
     std::shared_ptr<CEScript> CreateScript(const std::string& name = "");
     std::shared_ptr<CEScript> GetScript(const std::string& name);
 
     // 获取错误信息
     std::string GetLastError() const { return m_lastError; }
 
-    // 获取管理器（高级用法）
+    // 获取功能器（给高级用法）
     SymbolManager* GetSymbolManager() { return m_symbolManager.get(); }
     MemoryManager* GetMemoryManager() { return m_memoryManager.get(); }
 
@@ -69,6 +69,10 @@ public:
     friend class CEScript;
 
 private:
+    struct DelayedInstruction {
+        std::string instruction;
+        uintptr_t address;
+    };
     // 设置当前脚本上下文
     void SetCurrentScript(CEScript* script) { m_currentScript = script; }
 
@@ -90,8 +94,10 @@ private:
 
     // 汇编指令处理
     bool ProcessAssemblyInstruction(const std::string& line);
+    bool ProcessAssemblyBatch(const std::vector<std::string>& instructions, uintptr_t startAddress);
     bool ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr);
     bool WriteBytes(const std::vector<uint8_t>& bytes);
+    bool ContainsUnresolvedSymbols(const std::string& line);
 
     // 符号替换
     std::string ReplaceSymbols(const std::string& line);
@@ -110,7 +116,7 @@ private:
     std::string m_lastError;                             // 最后错误信息
     CEScript* m_currentScript;                           // 当前脚本上下文
 
-    // 管理的脚本集合
+    // 功能的脚本集合
     std::unordered_map<std::string, std::shared_ptr<CEScript>> m_scripts;
 
     // 补丁信息
