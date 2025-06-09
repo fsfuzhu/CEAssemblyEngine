@@ -1,23 +1,22 @@
 #include "CEAssemblyEngine.h"
-#include "DebugHelper.h"
+#include "Utils/DebugHelper.h"
 #include "CEScript.h"
-#include "SymbolManager.h"
-#include "PatternScanner.h"
-#include "MemoryAllocator.h"
-#include "ProcessManager.h"
+#include "Symbol/SymbolManager.h"
+#include "Scanner/PatternScanner.h"
+#include "MemoryManager.h"
 #include "Parser/CEScriptParser.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
 
 CEAssemblyEngine::CEAssemblyEngine()
-	: m_processManager(std::make_unique<ProcessManager>())
-	, m_memoryAllocator(std::make_unique<MemoryAllocator>())
+	: m_memoryManager(std::make_unique<MemoryManager>())
 	, m_patternScanner(std::make_unique<PatternScanner>())
 	, m_symbolManager(std::make_unique<SymbolManager>())
 	, m_parser(std::make_unique<CEScriptParser>())
 	, m_ksEngine(nullptr)
-	, m_currentAddress(0) {
+	, m_currentAddress(0)
+	, m_currentScript(nullptr) {
 
 	LOG_INFO("CEAssemblyEngine constructor called");
 
@@ -41,9 +40,8 @@ CEAssemblyEngine::~CEAssemblyEngine() {
 
 bool CEAssemblyEngine::AttachToProcess(DWORD pid) {
 	LOG_INFO_F("Attaching to process with PID: %d", pid);
-	if (m_processManager->OpenProcess(pid)) {
-		m_patternScanner->SetProcessManager(m_processManager.get());
-		m_memoryAllocator->SetProcessManager(m_processManager.get());
+	if (m_memoryManager->AttachToProcess(pid)) {
+		m_patternScanner->SetProcessManager(m_memoryManager.get());
 		return true;
 	}
 
@@ -54,7 +52,7 @@ bool CEAssemblyEngine::AttachToProcess(DWORD pid) {
 bool CEAssemblyEngine::AttachToProcess(const std::string& processName) {
 	LOG_INFO_F("Attempting to attach to process: %s", processName.c_str());
 
-	DWORD pid = ProcessManager::FindProcessByName(processName);
+	DWORD pid = MemoryManager::FindProcessByName(processName);
 	if (pid == 0) {
 		LOG_ERROR_F("Process '%s' not found", processName.c_str());
 		m_lastError = "Process not found: " + processName;
@@ -66,17 +64,16 @@ bool CEAssemblyEngine::AttachToProcess(const std::string& processName) {
 }
 
 void CEAssemblyEngine::DetachFromProcess() {
-	m_processManager->CloseProcess();
+	m_memoryManager->DetachFromProcess();
 	m_patternScanner->SetProcessManager(nullptr);
-	m_memoryAllocator->SetProcessManager(nullptr);
 }
 
 bool CEAssemblyEngine::IsAttached() const {
-	return  m_processManager->GetHandle() != nullptr;
+	return m_memoryManager->IsAttached();
 }
 
 DWORD CEAssemblyEngine::GetTargetPID() const {
-	return m_processManager->GetPID();
+	return m_memoryManager->GetPID();
 }
 
 std::shared_ptr<CEScript> CEAssemblyEngine::CreateScript(const std::string& name) {
@@ -101,7 +98,6 @@ std::shared_ptr<CEScript> CEAssemblyEngine::GetScript(const std::string& name) {
 	}
 	return nullptr;
 }
-
 void CEAssemblyEngine::AddPatch(uintptr_t address,
 	const std::vector<uint8_t>& originalBytes,
 	const std::vector<uint8_t>& newBytes) {
@@ -366,13 +362,14 @@ bool CEAssemblyEngine::WriteBytes(const std::vector<uint8_t>& bytes) {
 
 	// 保存原始字节
 	std::vector<uint8_t> originalBytes(bytes.size());
-	m_processManager->ReadMemory(m_currentAddress, originalBytes.data(), bytes.size());
+	m_memoryManager->ReadMemory(m_currentAddress, originalBytes.data(), bytes.size());
 
 	// 写入新字节
 	DWORD oldProtect;
-	if (m_processManager->ProtectMemory(m_currentAddress, bytes.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-		bool success = m_processManager->WriteMemory(m_currentAddress, bytes.data(), bytes.size());
-		m_processManager->ProtectMemory(m_currentAddress, bytes.size(), oldProtect, &oldProtect);
+	if (m_memoryManager->ProtectMemory(m_currentAddress, bytes.size(),
+		PAGE_EXECUTE_READWRITE, &oldProtect)) {
+		bool success = m_memoryManager->WriteMemory(m_currentAddress, bytes.data(), bytes.size());
+		m_memoryManager->ProtectMemory(m_currentAddress, bytes.size(), oldProtect, &oldProtect);
 
 		if (success) {
 			// 记录补丁
@@ -411,7 +408,7 @@ bool CEAssemblyEngine::ProcessAobScanModule(const std::string& line) {
 	}
 
 	m_symbolManager->RegisterSymbol(symbolName, address);
-	LOG_INFO_F("INJECT symbol registered at 0x%llX", address);
+	LOG_INFO_F("Symbol '%s' registered at 0x%llX", symbolName.c_str(), address);
 
 	auto capturedVars = m_patternScanner->GetCapturedVariables();
 	for (const auto& [name, data] : capturedVars) {
@@ -421,7 +418,6 @@ bool CEAssemblyEngine::ProcessAobScanModule(const std::string& line) {
 
 	return true;
 }
-
 bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 	ParsedCommand cmd = m_parser->ParseLine(line);
 	if (cmd.parameters.size() < 2) {
@@ -450,7 +446,7 @@ bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 
 	if (nearAddress != 0) {
 		// 策略1: 优先在附近地址申请，检查是否在E9范围内
-		allocAddr = m_memoryAllocator->AllocateNear(nearAddress, size, allocName);
+		allocAddr = m_memoryManager->AllocateNear(nearAddress, size, allocName);
 
 		if (allocAddr != 0) {
 			// 检查距离是否在E9范围内 (±2GB)
@@ -464,14 +460,11 @@ bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 					allocName.c_str(), allocAddr, nearAddress, distance);
 
 				// 距离太远，释放并尝试申请低位地址
-				m_memoryAllocator->Deallocate(allocName);
+				m_memoryManager->Deallocate(allocName);
 
 				// 策略2: 申请低位地址，使用FF25跳转
-				allocAddr = m_memoryAllocator->AllocateNear(0x10000000, size, allocName + "_low");
+				allocAddr = m_memoryManager->AllocateNear(0x10000000, size, allocName);
 				if (allocAddr != 0) {
-					// 重新注册正确的名称
-					m_memoryAllocator->Deallocate(allocName + "_low");
-					allocAddr = m_memoryAllocator->AllocateNear(0x10000000, size, allocName);
 					LOG_INFO_F("Memory allocated low: %s at 0x%llX (will use FF25 jump)",
 						allocName.c_str(), allocAddr);
 				}
@@ -480,7 +473,7 @@ bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 	}
 	else {
 		// 没有附近地址，直接申请低位地址
-		allocAddr = m_memoryAllocator->AllocateNear(0x10000000, size, allocName);
+		allocAddr = m_memoryManager->AllocateNear(0x10000000, size, allocName);
 		LOG_INFO_F("Memory allocated: %s at 0x%llX (no near address specified)",
 			allocName.c_str(), allocAddr);
 	}
@@ -576,9 +569,12 @@ bool CEAssemblyEngine::ProcessDbCommand(const std::string& line) {
 	for (const auto& patch : m_patches) {
 		if (patch.address == m_currentAddress) {
 			DWORD oldProtect;
-			if (m_processManager->ProtectMemory(patch.address, patch.originalBytes.size(), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-				m_processManager->WriteMemory(patch.address, patch.originalBytes.data(), patch.originalBytes.size());
-				m_processManager->ProtectMemory(patch.address, patch.originalBytes.size(), oldProtect, &oldProtect);
+			if (m_memoryManager->ProtectMemory(patch.address, patch.originalBytes.size(),
+				PAGE_EXECUTE_READWRITE, &oldProtect)) {
+				m_memoryManager->WriteMemory(patch.address, patch.originalBytes.data(),
+					patch.originalBytes.size());
+				m_memoryManager->ProtectMemory(patch.address, patch.originalBytes.size(),
+					oldProtect, &oldProtect);
 				return true;
 			}
 		}
@@ -604,5 +600,5 @@ bool CEAssemblyEngine::ProcessDealloc(const std::string& line) {
 		return false;
 	}
 
-	return m_memoryAllocator->Deallocate(cmd.parameters[0]);
+	return m_memoryManager->Deallocate(cmd.parameters[0]);
 }

@@ -1,12 +1,12 @@
-// PatternScanner.cpp
+// PatternScanner.cpp - 模式扫描器实现
 #include "PatternScanner.h"
-#include "ProcessManager.h"
-#include "DebugHelper.h"
+#include "Core\MemoryManager.h"
+#include "Utils\DebugHelper.h"
 #include <sstream>
 #include <Psapi.h>
 #include <algorithm>
 
-PatternScanner::PatternScanner() : m_processManager(nullptr) {}
+PatternScanner::PatternScanner() : m_memoryManager(nullptr) {}
 
 PatternScanner::~PatternScanner() {}
 
@@ -71,23 +71,26 @@ std::vector<PatternByte> PatternScanner::ParsePattern(const std::string& pattern
 uintptr_t PatternScanner::ScanModule(const std::string& moduleName, const std::string& pattern) {
     uintptr_t moduleBase = 0;
     size_t moduleSize = 0;
+
     LOG_INFO_F("ScanModule -> module=%s, pattern=\"%s\"",
         moduleName.c_str(), pattern.c_str());
 
-    if (m_processManager && m_processManager->GetHandle()) {
+    if (m_memoryManager && m_memoryManager->IsAttached()) {
         // 跨进程扫描
-        moduleBase = m_processManager->GetModuleBase(moduleName);
-        moduleSize = m_processManager->GetModuleSize(moduleName);
+        moduleBase = m_memoryManager->GetModuleBase(moduleName);
+        moduleSize = m_memoryManager->GetModuleSize(moduleName);
     }
     else {
         // 本进程扫描
         HMODULE hModule = GetModuleHandleA(moduleName.c_str());
         if (!hModule) {
+            LOG_ERROR_F("Module '%s' not found", moduleName.c_str());
             return 0;
         }
 
         MODULEINFO modInfo;
         if (!GetModuleInformation(GetCurrentProcess(), hModule, &modInfo, sizeof(MODULEINFO))) {
+            LOG_ERROR("Failed to get module information");
             return 0;
         }
 
@@ -96,6 +99,7 @@ uintptr_t PatternScanner::ScanModule(const std::string& moduleName, const std::s
     }
 
     if (moduleBase == 0 || moduleSize == 0) {
+        LOG_ERROR("Invalid module base or size");
         return 0;
     }
 
@@ -105,6 +109,7 @@ uintptr_t PatternScanner::ScanModule(const std::string& moduleName, const std::s
 
 uintptr_t PatternScanner::ScanMemory(uintptr_t start, size_t size, const std::vector<PatternByte>& pattern) {
     if (pattern.empty()) {
+        LOG_ERROR("Empty pattern");
         return 0;
     }
 
@@ -112,10 +117,11 @@ uintptr_t PatternScanner::ScanMemory(uintptr_t start, size_t size, const std::ve
     std::vector<uint8_t> buffer;
     uint8_t* scanData = nullptr;
 
-    if (m_processManager && m_processManager->GetHandle()) {
+    if (m_memoryManager && m_memoryManager->IsAttached()) {
         // 跨进程：读取整个区域到缓冲区
         buffer.resize(size);
-        if (!m_processManager->ReadMemory(start, buffer.data(), size)) {
+        if (!m_memoryManager->ReadMemory(start, buffer.data(), size)) {
+            LOG_ERROR("Failed to read memory for scanning");
             return 0;
         }
         scanData = buffer.data();
@@ -146,13 +152,22 @@ uintptr_t PatternScanner::ScanMemory(uintptr_t start, size_t size, const std::ve
                         capturedData.push_back(scanData[i + j + k]);
                     }
                     m_capturedVariables[pattern[j].captureName] = capturedData;
+
+                    // 记录捕获的值（调试用）
+                    uint64_t value = 0;
+                    for (size_t k = 0; k < capturedData.size() && k < 8; ++k) {
+                        value |= static_cast<uint64_t>(capturedData[k]) << (k * 8);
+                    }
+                    LOG_DEBUG_F("Captured variable '%s' = 0x%llX",
+                        pattern[j].captureName.c_str(), value);
                 }
             }
-            LOG_INFO_F("Pattern found @ 0x%llX", start + i);
 
+            LOG_INFO_F("Pattern found @ 0x%llX", start + i);
             return start + i;
         }
     }
+
     LOG_WARN("Pattern not found");
     return 0;
 }

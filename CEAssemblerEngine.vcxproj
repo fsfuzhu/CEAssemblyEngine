@@ -19,18 +19,15 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\CEAssemblyEngine.cpp" />
-    <ClCompile Include="src\CEScript.cpp" />
-    <ClCompile Include="src\DebugHelper.cpp" />
-    <ClCompile Include="src\main.cpp" />
-    <ClCompile Include="src\MemoryAllocator.cpp" />
-    <ClCompile Include="src\Parser\CEScriptParser.cpp" />
-    <ClCompile Include="src\PatternScanner.cpp" />
-    <ClCompile Include="src\ProcessManager.cpp" />
-    <ClCompile Include="src\SymbolManager.cpp" />
-    <ClCompile Include="src\Utils\StringUtils.cpp" />
-  </ItemGroup>
-  <ItemGroup>
+    <ClInclude Include="CEAssembly\CEAssembly.h" />
+    <ClInclude Include="CEAssembly\Core\CEAssemblyEngine.h" />
+    <ClInclude Include="CEAssembly\Core\CEScript.h" />
+    <ClInclude Include="CEAssembly\Core\MemoryManager.h" />
+    <ClInclude Include="CEAssembly\Parser\CEScriptParser.h" />
+    <ClInclude Include="CEAssembly\Scanner\PatternScanner.h" />
+    <ClInclude Include="CEAssembly\Symbol\SymbolManager.h" />
+    <ClInclude Include="CEAssembly\Utils\DebugHelper.h" />
+    <ClInclude Include="CEAssembly\Utils\StringUtils.h" />
     <ClInclude Include="include\keystone\arm.h" />
     <ClInclude Include="include\keystone\arm64.h" />
     <ClInclude Include="include\keystone\evm.h" />
@@ -41,22 +38,22 @@
     <ClInclude Include="include\keystone\sparc.h" />
     <ClInclude Include="include\keystone\systemz.h" />
     <ClInclude Include="include\keystone\x86.h" />
-    <ClInclude Include="src\CEAssembly.h" />
-    <ClInclude Include="src\CEAssemblyEngine.h" />
-    <ClInclude Include="src\CEScript.h" />
-    <ClInclude Include="src\DebugHelper.h" />
-    <ClInclude Include="src\MemoryAllocator.h" />
-    <ClInclude Include="src\Parser\CEScriptParser.h" />
-    <ClInclude Include="src\PatternScanner.h" />
-    <ClInclude Include="src\ProcessManager.h" />
-    <ClInclude Include="src\SymbolManager.h" />
-    <ClInclude Include="src\Utils\StringUtils.h" />
   </ItemGroup>
   <ItemGroup>
     <Library Include="lib\keystone.lib" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="CEAssembly\Core\CEAssemblyEngine.cpp" />
+    <ClCompile Include="CEAssembly\Core\CEScript.cpp" />
+    <ClCompile Include="CEAssembly\Core\MemoryManager.cpp" />
+    <ClCompile Include="CEAssembly\Parser\CEScriptParser.cpp" />
+    <ClCompile Include="CEAssembly\Scanner\PatternScanner.cpp" />
+    <ClCompile Include="CEAssembly\Symbol\SymbolManager.cpp" />
+    <ClCompile Include="CEAssembly\Utils\DebugHelper.cpp" />
+    <ClCompile Include="main.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -111,7 +108,7 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>src;include;$(IncludePath)</IncludePath>
+    <IncludePath>CEAssembly;include;$(IncludePath)</IncludePath>
     <LibraryPath>lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">

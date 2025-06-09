@@ -25,37 +25,29 @@
 // 前向声明所有类
 class CEAssemblyEngine;
 class CEScript;
-class ProcessManager;
+class MemoryManager;
 class SymbolManager;
 class PatternScanner;
-class MemoryAllocator;
 class CEScriptParser;
 
 // 包含所有头文件 - 按依赖顺序
-#include "ProcessManager.h"      // 进程管理（独立）
-#include "SymbolManager.h"       // 符号管理（独立）
-#include "PatternScanner.h"      // 特征码扫描（依赖 ProcessManager）
-#include "MemoryAllocator.h"     // 内存分配（依赖 ProcessManager）
-#include "Parser/CEScriptParser.h" // 脚本解析（独立）
-#include "CEAssemblyEngine.h"    // 主引擎（依赖以上所有）
-#include "CEScript.h"            // 脚本类（依赖 CEAssemblyEngine）
-#include "Utils/StringUtils.h"   // 工具类（独立）
+#include "Core\MemoryManager.h"
+#include "Symbol\SymbolManager.h"
+#include "Scanner\PatternScanner.h"
+#include "Parser\CEScriptParser.h"
+#include "Utils\StringUtils.h"
+#include "Core\CEAssemblyEngine.h"
+#include "Core\CEScript.h"
 
 // 链接库
 #pragma comment(lib, "psapi.lib")
-
-// 可选：游戏修改器示例
-#ifdef INCLUDE_EXAMPLES
-#include "Examples/GameTrainer.h"
-#include "Examples/RemoteGameTrainer.h"
-#endif
 
 // 导出的命名空间
 namespace CEAssembly {
     using Engine = CEAssemblyEngine;
     using Script = CEScript;
     using Parser = CEScriptParser;
-    using ProcMgr = ProcessManager;
+    using MemMgr = MemoryManager;
 
     // 便捷函数
     inline std::shared_ptr<CEScript> CreateAndLoadScript(CEAssemblyEngine& engine,
@@ -79,12 +71,12 @@ namespace CEAssembly {
 
     // 快速进程查找
     inline DWORD FindProcess(const std::string& processName) {
-        return ProcessManager::FindProcessByName(processName);
+        return MemoryManager::FindProcessByName(processName);
     }
 
     // 列出所有进程
     inline void ListProcesses() {
-        auto processes = ProcessManager::EnumerateProcesses();
+        auto processes = MemoryManager::EnumerateProcesses();
         std::cout << "=== 进程列表 ===" << std::endl;
         for (const auto& proc : processes) {
             std::cout << std::setw(30) << std::left << proc.name
@@ -92,6 +84,42 @@ namespace CEAssembly {
                 << std::endl;
         }
     }
+
+    // 创建基本的游戏修改器示例
+    class SimpleGameTrainer {
+    private:
+        CEAssemblyEngine m_engine;
+        std::shared_ptr<CEScript> m_script;
+
+    public:
+        bool AttachToGame(const std::string& processName) {
+            return m_engine.AttachToProcess(processName);
+        }
+
+        bool LoadScript(const std::string& scriptContent) {
+            m_script = m_engine.CreateScript("MainScript");
+            return m_script && m_script->Load(scriptContent);
+        }
+
+        bool LoadScriptFromFile(const std::string& filename) {
+            m_script = m_engine.CreateScript();
+            return m_script && m_script->LoadFromFile(filename);
+        }
+
+        bool EnableHack() {
+            return m_script && m_script->Enable();
+        }
+
+        bool DisableHack() {
+            return m_script && m_script->Disable();
+        }
+
+        void Detach() {
+            m_engine.DetachFromProcess();
+        }
+
+        CEAssemblyEngine& GetEngine() { return m_engine; }
+    };
 }
 
 // 使用 CEAssembly 命名空间

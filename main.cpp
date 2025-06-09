@@ -1,8 +1,8 @@
 ﻿#include <iostream>
 #include <fstream>
 #include <sstream>
-#include "CEAssembly.h"  // 使用统一包含文件
-#include "DebugHelper.h"   
+#include "CEAssembly/CEAssembly.h"
+#include "CEAssembly/Utils/DebugHelper.h"
 
 int main() {
     DEBUG_INIT(DebugLevel::Trace);

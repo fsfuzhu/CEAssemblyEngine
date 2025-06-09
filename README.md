@@ -1,399 +1,285 @@
-# CE Assembly Engine - Cheat Engine 自动汇编引擎
+# CE汇编引擎代码重构说明
 
-一个完全兼容 Cheat Engine 自动汇编语法的 C++ 引擎，支持高级通配符和动态符号管理。
+## 重构概览
 
-## 特性
+### 1. 合并的类
 
-- ✅ 完整支持 CE 自动汇编语法
-- ✅ 支持 `aobscanmodule`、`alloc`、`label`、`registersymbol` 等所有 CE 命令
-- ✅ 高级通配符支持：`*`（两字节）、`?`（单字节）、`s1.2`（变量捕获）
-- ✅ 动态符号注册和解析
-- ✅ 智能内存分配（在目标地址附近分配以支持短跳转）
-- ✅ **跨进程修改支持**（可以修改其他进程）
-- ✅ 进程枚举和自动附加
-- ✅ 集成 Keystone 汇编引擎
-- ✅ 可选集成 AsmJit 进行高级代码生成
+* **ProcessManager + MemoryAllocator → MemoryManager**
 
-## 编译要求
+  * 统一管理进程附加、内存读写、内存分配等功能
+  * 减少了类之间的依赖关系
+  * 简化了API调用
 
-- Visual Studio 2019 或更高版本
-- CMake 3.16 或更高版本
-- Windows SDK
-- Keystone Engine（已包含在项目中）
-- AsmJit（可选）
+### 2. 保留的独立类
 
-## 构建步骤
+* **PatternScanner** - 保持独立，功能专一
+* **SymbolManager** - 保持独立，符号管理
+* **CEScriptParser** - 保持独立，脚本解析
+* **StringUtils** - 保持独立，工具函数
 
-```bash
-# 创建构建目录
-mkdir build
-cd build
+### 3. 移除的文件
 
-# 生成项目文件
-cmake ..
+* ProcessManager.h/cpp（合并到MemoryManager）
+* MemoryAllocator.h/cpp（合并到MemoryManager）
+* 多个空的StringUtils.cpp文件
+* 重复的头文件
 
-# 编译
-cmake --build . --config Release
-```
+## 主要改进
 
-## 使用示例
-
-### 基本使用 - 本进程
+### MemoryManager 统一接口
 
 ```cpp
-// 使用统一包含文件，避免包含顺序问题
-#include "CEAssembly.h"
-
-// 创建引擎实例
-CEAssemblyEngine engine;
-
-// CE 脚本内容
-std::string scriptContent = R"(
-[ENABLE]
-aobscanmodule(INJECT,Game.exe,48 8B 05 ?? ?? ?? ?? 48 83 C0 08)
-alloc(newmem,$1000,INJECT)
-
-newmem:
-  mov rax, [rax+10]
-  ret
-
-INJECT:
-  call newmem
-  nop 3
-
-[DISABLE]
-INJECT:
-  db 48 8B 05 ?? ?? ?? ?? 48 83 C0 08
-dealloc(newmem)
-)";
-
-// 1. 创建脚本对象
-auto script = engine.CreateScript("MyCheat");
-
-// 2. 加载脚本内容
-if (!script->Load(scriptContent)) {
-    std::cout << "加载失败: " << script->GetLastError() << std::endl;
-    return;
-}
-
-// 3. 启用脚本（执行[ENABLE]部分）
-if (script->Enable()) {
-    std::cout << "脚本已启用!" << std::endl;
-}
-
-// 4. 禁用脚本（执行[DISABLE]部分）
-if (script->Disable()) {
-    std::cout << "脚本已禁用!" << std::endl;
-}
+class MemoryManager {
+    // 进程管理
+    bool AttachToProcess(DWORD pid);
+    bool AttachToProcess(const std::string& processName);
+    void DetachFromProcess();
+    
+    // 内存操作
+    bool ReadMemory(uintptr_t address, void* buffer, size_t size);
+    bool WriteMemory(uintptr_t address, const void* data, size_t size);
+    
+    // 内存分配
+    uintptr_t AllocateMemory(size_t size, uintptr_t nearAddress = 0);
+    uintptr_t AllocateNear(uintptr_t nearAddress, size_t size, const std::string& name);
+    
+    // 模块信息
+    uintptr_t GetModuleBase(const std::string& moduleName);
+    size_t GetModuleSize(const std::string& moduleName);
+};
 ```
 
-### 跨进程修改
+### CEAssemblyEngine 简化
 
 ```cpp
-#include "CEAssembly.h"
+// 之前
+m_processManager->OpenProcess(pid);
+m_memoryAllocator->SetProcessManager(m_processManager.get());
+m_patternScanner->SetProcessManager(m_processManager.get());
 
-CEAssemblyEngine engine;
-
-// 方法1：通过进程名附加
-if (engine.AttachToProcess("Game.exe")) {
-    std::cout << "成功附加到 Game.exe" << std::endl;
-    
-    // 创建并执行脚本
-    auto script = engine.CreateScript("RemoteCheat");
-    script->Load(scriptContent);
-    script->Enable();
-    
-    // 完成后分离
-    engine.DetachFromProcess();
-}
-
-// 方法2：通过PID附加
-DWORD pid = ProcessManager::FindProcessByName("Game.exe");
-if (engine.AttachToProcess(pid)) {
-    // ... 执行脚本 ...
-}
-
-// 方法3：枚举所有进程
-auto processes = ProcessManager::EnumerateProcesses();
-for (const auto& proc : processes) {
-    std::cout << proc.name << " (PID: " << proc.pid << ")" << std::endl;
-}
+// 现在
+m_memoryManager->AttachToProcess(pid);
+m_patternScanner->SetProcessManager(m_memoryManager.get());
 ```
 
-### 从文件加载脚本
+### 使用示例简化
 
 ```cpp
-// 创建脚本并从文件加载
-auto script = engine.CreateScript();
-if (script->LoadFromFile("cheats/godmode.cea")) {
-    script->Enable();  // 启用
-    // ...
-    script->Disable(); // 禁用
-}
-```
+// 使用统一的命名空间
+using namespace CEAssembly;
 
-### 管理多个脚本
-
-```cpp
-CEAssemblyEngine engine;
-
-// 创建多个脚本
-auto godMode = engine.CreateScript("GodMode");
-auto infiniteAmmo = engine.CreateScript("InfiniteAmmo");
-auto speedHack = engine.CreateScript("SpeedHack");
-
-// 加载脚本内容
-godMode->Load(godModeScript);
-infiniteAmmo->Load(infiniteAmmoScript);
-speedHack->Load(speedHackScript);
-
-// 独立控制每个脚本
-godMode->Enable();      // 只启用无敌模式
-infiniteAmmo->Enable(); // 启用无限弹药
-
-// 检查状态
-if (godMode->IsEnabled()) {
-    std::cout << "无敌模式已激活" << std::endl;
-}
-
-// 禁用特定脚本
-godMode->Disable();
-```
-
-### 使用变量捕获
-
-```cpp
-std::string script = R"(
-[ENABLE]
-// s1.4 将捕获4个字节并赋值给变量 s1
-aobscanmodule(playerBase,Game.exe,48 8B 05 s1.4 48 83 C0 08)
-alloc(godMode,$100,playerBase)
-
-godMode:
-  mov rax, s1      // 使用捕获的地址
-  mov dword [rax], #9999  // 设置生命值
-  ret
-
-playerBase:
-  call godMode
-)";
-```
-
-## 集成 AsmJit（可选）
-
-如果需要更高级的动态代码生成功能，可以集成 AsmJit：
-
-### 1. 安装 AsmJit
-
-```bash
-git clone https://github.com/asmjit/asmjit.git
-cd asmjit
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release
-```
-
-### 2. 修改 CMakeLists.txt
-
-```cmake
-# 添加 AsmJit
-find_package(asmjit REQUIRED)
-target_link_libraries(${PROJECT_NAME} asmjit::asmjit)
-```
-
-### 3. 使用 AsmJit 生成复杂代码
-
-```cpp
-#include <asmjit/asmjit.h>
-
-bool CEAssemblyEngine::GenerateComplexCode(uintptr_t address) {
-    using namespace asmjit;
-    
-    JitRuntime rt;
-    CodeHolder code;
-    code.init(rt.environment());
-    
-    x86::Assembler a(&code);
-    
-    // 生成动态跳转表
-    Label jumpTable = a.newLabel();
-    Label case1 = a.newLabel();
-    Label case2 = a.newLabel();
-    
-    // 主代码
-    a.mov(x86::rax, x86::qword_ptr(x86::rcx));
-    a.cmp(x86::rax, 1);
-    a.je(case1);
-    a.cmp(x86::rax, 2);
-    a.je(case2);
-    
-    // 处理情况
-    a.bind(case1);
-    a.mov(x86::rax, 100);
-    a.ret();
-    
-    a.bind(case2);
-    a.mov(x86::rax, 200);
-    a.ret();
-    
-    // 获取生成的代码
-    CodeBuffer& buffer = code.sectionById(0)->buffer();
-    WriteProcessMemory(GetCurrentProcess(), 
-                      reinterpret_cast<LPVOID>(address),
-                      buffer.data(), 
-                      buffer.size(), 
-                      nullptr);
-    
-    return true;
-}
-```
-
-## 高级功能
-
-### 跨进程修改
-
-引擎完全支持跨进程内存修改，类似于 Cheat Engine：
-
-```cpp
-// 附加到目标进程
-CEAssemblyEngine engine;
-
-// 方式1：通过进程名
-if (engine.AttachToProcess("Game.exe")) {
-    // 执行修改...
-    engine.DetachFromProcess();
-}
-
-// 方式2：通过PID
-DWORD pid = 1234;
-if (engine.AttachToProcess(pid)) {
-    // 执行修改...
-}
-
-// 枚举所有进程
-auto processes = ProcessManager::EnumerateProcesses();
-for (const auto& proc : processes) {
-    std::cout << proc.name << " (PID: " << proc.pid << ")" << std::endl;
-}
-```
-
-**注意事项**：
-- 需要管理员权限才能修改其他进程
-- 自动处理 32 位和 64 位进程
-- 支持远程内存分配和代码注入
-- 所有 CE 脚本功能都支持跨进程
-
-### 自定义通配符
-
-引擎支持自定义通配符语法：
-
-- `*` - 匹配任意两个字节（等同于 `??`）
-- `?` - 匹配任意一个字节
-- `s1.2` - 捕获2个字节到变量 s1
-- `s2.4` - 捕获4个字节到变量 s2
-- `s3.8` - 捕获8个字节到变量 s3
-
-### 符号管理
-
-```cpp
-// 手动注册符号
-engine.GetSymbolManager()->RegisterSymbol("mySymbol", 0x12345678);
-
-// 获取符号地址
-uintptr_t addr;
-if (engine.GetSymbolManager()->GetSymbolAddress("mySymbol", addr)) {
-    std::cout << "Symbol address: " << std::hex << addr << std::endl;
-}
-```
-
-### 错误处理
-
-```cpp
-if (!engine.ExecuteScript(script)) {
-    std::string error = engine.GetLastError();
-    
-    // 详细错误信息
-    if (error.find("Pattern not found") != std::string::npos) {
-        std::cout << "特征码未找到，请检查目标进程" << std::endl;
-    } else if (error.find("Failed to allocate") != std::string::npos) {
-        std::cout << "内存分配失败" << std::endl;
+// 创建简单的游戏修改器
+SimpleGameTrainer trainer;
+if (trainer.AttachToGame("game.exe")) {
+    if (trainer.LoadScriptFromFile("hack.cea")) {
+        trainer.EnableHack();
+        // ...
+        trainer.DisableHack();
     }
+    trainer.Detach();
 }
 ```
 
-## 注意事项
+## 文件结构
 
-1. **权限要求**：
-   - 修改本进程不需要特殊权限
-   - 跨进程修改需要管理员权限
-   - 建议以管理员身份运行程序
-
-2. **地址空间**：x64 程序的跳转限制为 ±2GB，引擎会自动在目标附近分配内存
-
-3. **符号作用域**：符号在脚本执行期间有效，可以通过 `registersymbol` 持久化
-
-4. **进程架构**：
-   - x64 引擎可以修改 x64 和 x86 进程
-   - x86 引擎只能修改 x86 进程
-   - 引擎会自动检测目标进程架构
-
-## 扩展开发
-
-### 添加新的 CE 命令
-
-```cpp
-// 在 CEAssemblyEngine.cpp 中添加
-bool CEAssemblyEngine::ProcessCustomCommand(const std::string& line) {
-    ParsedCommand cmd = m_parser->ParseLine(line);
-    
-    if (cmd.type == CommandType::CUSTOM) {
-        // 实现自定义命令逻辑
-        return true;
-    }
-    
-    return false;
-}
+```
+CEAssembly/
+├── Core/
+│   ├── CEAssemblyEngine.h/cpp    # 主引擎
+│   ├── CEScript.h/cpp            # 脚本类
+│   └── MemoryManager.h/cpp       # 统一的内存管理
+├── Parser/
+│   └── CEScriptParser.h/cpp      # 脚本解析器
+├── Scanner/
+│   └── PatternScanner.h/cpp      # 特征码扫描
+├── Symbol/
+│   └── SymbolManager.h/cpp       # 符号管理
+├── Utils/
+│   ├── StringUtils.h             # 字符串工具
+│   └── DebugHelper.h/cpp         # 调试辅助
+└── CEAssembly.h                  # 统一包含文件
 ```
 
-### 支持新的通配符格式
+## 编译依赖
 
-```cpp
-// 在 PatternScanner.cpp 中扩展
-if (token.find('~') != std::string::npos) {
-    // 处理新的通配符格式，如 ~4 表示跳过4个字节
-    size_t skipBytes = std::stoi(token.substr(1));
-    for (size_t i = 0; i < skipBytes; ++i) {
-        pb.isWildcard = true;
-        result.push_back(pb);
-    }
-}
-```
+1. **Keystone Engine** - 汇编引擎
+2. **Windows SDK** - Windows API
+3. **C++17** - 标准库支持
 
-## 性能优化建议
+## 使用建议
 
-1. **批量扫描**：对多个特征码使用单次扫描
-2. **缓存结果**：缓存常用的扫描结果
-3. **并行处理**：使用多线程进行特征码扫描
+1. **使用统一包含文件**
 
-## 常见问题
-
-### 编译错误："no operator matches these operands"
-
-如果遇到 `PatchInfo` 类型不匹配的错误，请确保：
-
-1. 使用统一包含文件 `CEAssembly.h`
-2. 或按正确顺序包含：
    ```cpp
-   #include "CEAssemblyEngine.h"  // 先包含（定义PatchInfo）
-   #include "CEScript.h"           // 后包含（使用PatchInfo）
+   #include "CEAssembly.h"
    ```
 
-### 链接错误
+2. **使用命名空间**
 
-确保已正确链接 Keystone 库：
-- 将 `keystone.lib` 放在 `lib/` 目录
-- 在项目设置中添加库路径和依赖项
+   ```cpp
+   using namespace CEAssembly;
+   ```
 
-## 许可证
+3. **错误处理**
 
-本项目使用 MIT 许可证。Keystone Engine 使用其自己的许可证。
+   ```cpp
+   if (!engine.AttachToProcess("target.exe")) {
+       std::cerr << "Error: " << engine.GetLastError() << std::endl;
+   }
+   ```
+
+4. **资源管理**
+
+   * 使用RAII原则
+   * 析构函数自动清理资源
+   * 使用智能指针管理脚本
+
+## 性能优化
+
+1. **内存分配策略**
+
+   * 优先在目标地址附近分配（E9跳转）
+   * 失败时尝试低位地址（FF25跳转）
+
+2. **批量操作**
+
+   * 减少跨进程调用次数
+   * 缓存模块信息
+
+3. **符号管理**
+
+   * 使用哈希表快速查找
+   * 支持前向引用
+
+---
+
+## 自动汇编脚本执行流程示例
+
+下面以一个典型脚本为例，说明 `[ENABLE]` 和 `[DISABLE]` 两个阶段中各指令的执行顺序、符号/内存管理以及汇编代码写入流程。
+
+```assembly
+[ENABLE]
+aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
+alloc(newmem,$1000,INJECT)
+label(code)
+label(return)
+newmem:
+mov rax,#123
+code:
+  mov rdx,[rax+r10]
+  mov rax,[rbx+10]
+  jmp return
+INJECT:
+  jmp newmem
+  nop 3
+return:
+registersymbol(INJECT)
+[DISABLE]
+INJECT:
+  db 4A 8B 14 10 48 8B 43 10
+unregistersymbol(INJECT)
+dealloc(newmem)
+```
+
+> 以下流程中的所有地址均为示例值，用于帮助理解。
+
+### `[ENABLE]` 阶段
+
+1. **aobscanmodule**
+
+   * 在模块 `Notepad.exe` 内搜索特征码 `4A 8B 14 10 48 8B 43 10`。
+   * 找到唯一匹配地址 `0x7FF7 7569 2E0A`。
+   * 将该地址注册为**局部符号** `INJECT`（仅当前脚本可见）。
+
+2. **alloc**
+
+   * 在 `INJECT` 附近申请 `0x1000` 字节可执行内存，得到地址 `0x7FF7 7558 0000`。
+   * 注册**局部符号** `newmem` 指向该地址。
+
+3. **label(code) / label(return)**
+
+   * 在局部符号表中新建 `code` 和 `return`，初始地址为 `0`，稍后填充。
+
+4. **newmem:**
+
+   * 指明接下来汇编将写入 `newmem`（`0x7FF7 7558 0000`）。
+
+5. **mov rax,#123**
+
+   * 交给 Keystone 汇编，生成机器码 `48 B8 7B 00 00 00 00 00 00 00`（10 字节）。
+   * 写入 `newmem`，当前写指针移至 `0x7FF7 7558 000A`。
+
+6. **code:**
+
+   * 把当前地址 `0x7FF7 7558 000A` 填入局部符号 `code`。
+
+7. **mov rdx,\[rax+r10]** → `4A 8B 14 10`
+
+   * 写入并将指针移至 `0x7FF7 7558 000E`。
+
+8. **mov rax,\[rbx+10]** → `48 8B 43 10`
+
+   * 写入并将指针移至 `0x7FF7 7558 0012`。
+
+9. **jmp return**
+
+   * 由于 `return` 位置尚未确定，先留下占位（稍后回填）。
+
+10. **INJECT:**
+
+    * 切换写指针到 `INJECT` (`0x7FF7 7569 2E0A`)。
+
+11. **jmp newmem**
+
+    * 生成近跳转 `E9 F1 D1 EE FF` 并写入。
+    * 指针移至 `0x7FF7 7569 2E0F`。
+
+12. **nop 3**
+
+    * 写入 `90 90 90`（或 `0F 1F 00`）。
+    * 指针移至 `0x7FF7 7569 2E12`。
+
+13. **return:**
+
+    * 将当前地址 `0x7FF7 7569 2E12` 记录为 `return`。
+    * 回到 `jmp return` 的占位，计算位移并回填机器码。
+
+14. **registersymbol(INJECT)**
+
+    * 把 `INJECT` 从局部提升为**全局符号**，供其他脚本访问。
+
+### `[DISABLE]` 阶段
+
+1. **INJECT:**
+
+   * 写指针定位到 `0x7FF7 7569 2E0A`。
+
+2. **db 4A 8B 14 10 48 8B 43 10**
+
+   * 恢复原始字节，移除跳转与 NOP。
+
+3. **unregistersymbol(INJECT)**
+
+   * 将 `INJECT` 从全局符号表移除。
+
+4. **dealloc(newmem)**
+
+   * 释放 `0x7FF7 7558 0000` 处的动态内存。
+
+---
+
+> 该示例展示了 **CEAssemblyEngine** 在脚本各阶段的核心工作流程，包括：
+>
+> * 特征码扫描 → 符号绑定
+> * 动态内存申请 → 汇编写入
+> * 跳转构建 → 回填占位
+> * 符号注册 / 反注册
+> * 资源回收
+
+---
+
+### TODO
+
+* 自动处理 `s1.2`, `*` 与 `?` 通配符的捕获与替换
+* 支持浮点立即数写入（如 `mov [rax+s2],(float)500`）
+* 支持多脚本并发启停的依赖检测

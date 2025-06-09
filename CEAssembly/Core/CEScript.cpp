@@ -1,6 +1,6 @@
 // CEScript.cpp
 #include "CEScript.h"
-#include "DebugHelper.h"
+#include "Utils\DebugHelper.h"
 #include "CEAssemblyEngine.h"  // 需要包含以获取PatchInfo定义
 #include "Parser/CEScriptParser.h"
 #include <fstream>

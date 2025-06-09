@@ -42,9 +42,6 @@
     <ClCompile Include="src\Parser\CEScriptParser.cpp">
       <Filter>src\Parser</Filter>
     </ClCompile>
-    <ClCompile Include="src\Parser\Tokenizer.cpp">
-      <Filter>src\Parser</Filter>
-    </ClCompile>
     <ClCompile Include="src\Utils\StringUtils.cpp">
       <Filter>src\Utils</Filter>
     </ClCompile>
@@ -52,6 +49,9 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="src\ProcessManager.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DebugHelper.cpp">
       <Filter>src</Filter>
     </ClCompile>
   </ItemGroup>
@@ -101,9 +101,6 @@
     <ClInclude Include="src\Parser\CEScriptParser.h">
       <Filter>src\Parser</Filter>
     </ClInclude>
-    <ClInclude Include="src\Parser\Tokenizer.h">
-      <Filter>src\Parser</Filter>
-    </ClInclude>
     <ClInclude Include="src\Utils\StringUtils.h">
       <Filter>src\Utils</Filter>
     </ClInclude>
@@ -114,6 +111,9 @@
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="src\ProcessManager.h">
+      <Filter>src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\DebugHelper.h">
       <Filter>src</Filter>
     </ClInclude>
   </ItemGroup>
