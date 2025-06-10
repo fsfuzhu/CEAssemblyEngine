@@ -1,4 +1,3 @@
-
 // SymbolManager.h
 #pragma once
 #include <string>
@@ -37,6 +36,9 @@ public:
 
     // 判断符号是否存在
     bool SymbolExists(const std::string& name) const;
+
+    // 获取所有符号（用于查找标签）
+    const std::unordered_map<std::string, SymbolInfo>& GetAllSymbols() const { return m_symbols; }
 
 private:
     std::unordered_map<std::string, SymbolInfo> m_symbols;

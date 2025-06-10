@@ -1,20 +1,21 @@
-// CEAssemblyEngine.h - CE汇编引擎主类
+// CEAssemblyEngine.h - CE Assembly Engine Main Class
 #pragma once
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <map>
 #include <memory>
 #include <Windows.h>
 #include <keystone/keystone.h>
 
-// 前向声明
+// Forward declarations
 class SymbolManager;
 class PatternScanner;
 class MemoryManager;
 class CEScriptParser;
 class CEScript;
 
-// 命令类型
+// Command types
 enum class CommandType {
     AOBSCANMODULE,
     ALLOC,
@@ -27,45 +28,45 @@ enum class CommandType {
     UNKNOWN
 };
 
-// 解析后的命令
+// Parsed command structure
 struct ParsedCommand {
     CommandType type;
     std::vector<std::string> parameters;
     std::string rawLine;
 };
 
-// 补丁信息
+// Patch information
 struct PatchInfo {
     uintptr_t address;
     std::vector<uint8_t> originalBytes;
     std::vector<uint8_t> newBytes;
 };
 
-// CE汇编引擎主类
+// CE Assembly Engine class
 class CEAssemblyEngine {
 public:
     CEAssemblyEngine();
     ~CEAssemblyEngine();
 
-    // 目标进程功能
+    // Process management
     bool AttachToProcess(DWORD pid);
     bool AttachToProcess(const std::string& processName);
     void DetachFromProcess();
     bool IsAttached() const;
     DWORD GetTargetPID() const;
 
-    // 脚本功能
+    // Script management
     std::shared_ptr<CEScript> CreateScript(const std::string& name = "");
     std::shared_ptr<CEScript> GetScript(const std::string& name);
 
-    // 获取错误信息
+    // Error handling
     std::string GetLastError() const { return m_lastError; }
 
-    // 获取功能器（给高级用法）
+    // Get component pointers (for advanced usage)
     SymbolManager* GetSymbolManager() { return m_symbolManager.get(); }
     MemoryManager* GetMemoryManager() { return m_memoryManager.get(); }
 
-    // 友元类，允许CEScript访问内部方法
+    // Friend class to allow CEScript access to private methods
     friend class CEScript;
 
 private:
@@ -73,17 +74,18 @@ private:
         std::string instruction;
         uintptr_t address;
     };
-    // 设置当前脚本上下文
+
+    // Set current script context
     void SetCurrentScript(CEScript* script) { m_currentScript = script; }
 
-    // 处理脚本块
+    // Process script blocks
     bool ProcessEnableBlock(const std::vector<std::string>& lines);
     bool ProcessDisableBlock(const std::vector<std::string>& lines);
 
-    // 获取补丁信息
+    // Get patch information
     std::vector<PatchInfo> GetPatches() const { return m_patches; }
 
-    // 处理CE命令
+    // Process CE commands
     bool ProcessAobScanModule(const std::string& line);
     bool ProcessAlloc(const std::string& line);
     bool ProcessLabel(const std::string& line);
@@ -92,35 +94,55 @@ private:
     bool ProcessDealloc(const std::string& line);
     bool ProcessDbCommand(const std::string& line);
 
-    // 汇编指令处理
+    // Assembly instruction processing
     bool ProcessAssemblyInstruction(const std::string& line);
     bool ProcessAssemblyBatch(const std::vector<std::string>& instructions, uintptr_t startAddress);
     bool ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr);
     bool WriteBytes(const std::vector<uint8_t>& bytes);
 
-    // 符号替换
+    // Symbol replacement
     std::string ReplaceSymbols(const std::string& line);
 
-    // 添加补丁记录
+    // Add patch record
     void AddPatch(uintptr_t address, const std::vector<uint8_t>& originalBytes,
         const std::vector<uint8_t>& newBytes);
 
-    // 成员变量
-    std::unique_ptr<MemoryManager> m_memoryManager;     // 统一的内存管理器
-    std::unique_ptr<SymbolManager> m_symbolManager;     // 符号管理器
-    std::unique_ptr<PatternScanner> m_patternScanner;   // 模式扫描器
-    std::unique_ptr<CEScriptParser> m_parser;           // 脚本解析器
+    // Helper functions for special instruction processing
+    bool ProcessDataDirective(const std::string& line);
+    bool ProcessCESpecialJump(const std::string& line);
+    bool GenerateConditionalJump(uint8_t opcode, uintptr_t targetAddr);
+    bool ProcessSpecialMovInstruction(const std::string& line);
 
-    ks_engine* m_ksEngine;                               // Keystone汇编引擎
-    std::string m_lastError;                             // 最后错误信息
-    CEScript* m_currentScript;                           // 当前脚本上下文
+    // For tracking anonymous labels (@@)
+    std::vector<uintptr_t> m_anonymousLabels;
 
-    // 功能的脚本集合
+    // For tracking all labels in order
+    std::map<uintptr_t, std::string> m_allLabels;  // address -> label name ("@@" for anonymous)
+
+    // Helper to find next/previous anonymous label
+    uintptr_t FindNextAnonymousLabel(uintptr_t fromAddress);
+    uintptr_t FindPreviousAnonymousLabel(uintptr_t fromAddress);
+
+    // Helper to find next/previous label (any type)
+    uintptr_t FindNextLabel(uintptr_t fromAddress);
+    uintptr_t FindPreviousLabel(uintptr_t fromAddress);
+
+    // Member variables
+    std::unique_ptr<MemoryManager> m_memoryManager;     // Memory management
+    std::unique_ptr<SymbolManager> m_symbolManager;     // Symbol management
+    std::unique_ptr<PatternScanner> m_patternScanner;   // Pattern scanner
+    std::unique_ptr<CEScriptParser> m_parser;           // Script parser
+
+    ks_engine* m_ksEngine;                               // Keystone engine
+    std::string m_lastError;                             // Last error message
+    CEScript* m_currentScript;                           // Current script context
+
+    // Script collection
     std::unordered_map<std::string, std::shared_ptr<CEScript>> m_scripts;
 
-    // 补丁信息
+    // Patch information
     std::vector<PatchInfo> m_patches;
 
-    // 当前处理地址
+    // Current processing address
     uintptr_t m_currentAddress;
 };

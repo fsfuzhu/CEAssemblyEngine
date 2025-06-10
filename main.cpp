@@ -7,53 +7,59 @@
 int main() {
     DEBUG_INIT(DebugLevel::Trace);
 
-    // 按照用户详细说明的脚本示例
+    // Original CE script - @f jumps to next label (not necessarily @@)
     std::string scriptContent = R"(
 [ENABLE]
-
-aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
-alloc(newmem,$1000,INJECT)
-
+aobscanmodule(aobplayer,GTA5_Enhanced.exe,48 8B 40 08 48 85 C0 0F 84 FD 00 00 00 F3 0F 10 80 15 18 00 00 0F 2E 80 80 02 00 00 0F 87 E8 00 00 00)
+alloc(newmem,$1000,aobplayer)
 label(code)
 label(return)
+label(health armor player location)
+registersymbol(health armor player location)
 
 newmem:
-  mov rax,10          // 应该变成 mov rax,0x10
-  mov rbx,#10         // 应该变成 mov rbx,10 (十进制)
-  mov rcx,$10         // 应该变成 mov rcx,0x10
-  mov rdx,0x10        // 应该保持 mov rdx,0x10
-  
-  // 测试包含A-F的十六进制
-  xor r10d,49656E69   // 应该变成 xor r10d,0x49656E69
-  mov eax,DEADBEEF    // 应该变成 mov eax,0xDEADBEEF
-  
-  // 测试运算符中的数字
-  mov rax,[rbx+10]    // 应该变成 mov rax,[rbx+0x10]
-  lea rdx,[rcx-20]    // 应该变成 lea rdx,[rcx-0x20]
-  add rax,30          // 应该变成 add rax,0x30
-  
-  // 测试其他指令
-  push 40             // 应该变成 push 0x40
-  sub rsp,50          // 应该变成 sub rsp,0x50
-  
-  mov r8,r9           // 寄存器不应该被改变
+  push rdx
+  mov [player],rax
+  mov rdx,[rax+30]
+  test rdx,rdx
+  je @f
+  lea rdx,[rdx+50]
+  mov [location],rdx
+@@:
+  lea rdx,[rax+1815]
+  cmp [health],1
+  jne @f
+  mov [rax+280],(float)500
+@@:
+  cmp [armor],1
+  jne @f
+  mov [rdx-0C],(float)100
 code:
-  mov rdx,[rax+r10]
-  mov rax,[rbx+10]
+  movss xmm0,[rdx]
+  pop rdx
   jmp return
 
-INJECT:
+newmem+200:
+health:
+dd 0
+armor:
+dd 0
+
+newmem+400:
+player:
+dq 0
+location:
+dq 0
+
+aobplayer+D:
   jmp newmem
   nop 3
 return:
-registersymbol(INJECT)
+registersymbol(aobplayer)
 
 [DISABLE]
-
-INJECT:
-  db 4A 8B 14 10 48 8B 43 10
-
-unregistersymbol(INJECT)
+aobplayer+D:
+  db F3 0F 10 80 15 18 00 00
 dealloc(newmem)
 )";
 
@@ -61,9 +67,8 @@ dealloc(newmem)
     CEAssemblyEngine engine;
 
     // 连接到进程
-    if (engine.AttachToProcess("notepad.exe")) {
-        std::cout << "成功连接到 notepad.exe (PID: " << engine.GetTargetPID() << ")" << std::endl;
-
+    if (engine.AttachToProcess("GTA5_Enhanced.exe")) {
+        std::cout << "成功连接到 GTA5_Enhanced.exe (PID: " << engine.GetTargetPID() << ")" << std::endl;
         // 创建脚本
         auto script = engine.CreateScript("RemoteHack");
 
@@ -93,7 +98,7 @@ dealloc(newmem)
             else {
                 std::cout << "✗ 脚本启用失败: " << script->GetLastError() << std::endl;
                 std::cout << "\n常见问题检查：" << std::endl;
-                std::cout << "1. 确保记事本在运行" << std::endl;
+                std::cout << "1. 确保游戏在运行" << std::endl;
                 std::cout << "2. 确保模式匹配正确" << std::endl;
                 std::cout << "3. 检查权限设置" << std::endl;
             }
@@ -107,9 +112,9 @@ dealloc(newmem)
         std::cout << "已断开与进程的连接" << std::endl;
     }
     else {
-        std::cout << "✗ 无法连接到 notepad.exe: " << engine.GetLastError() << std::endl;
+        std::cout << "✗ 无法连接到 GTA5_Enhanced.exe: " << engine.GetLastError() << std::endl;
         std::cout << "\n解决方案：" << std::endl;
-        std::cout << "1. 启动记事本 (notepad.exe)" << std::endl;
+        std::cout << "1. 启动游戏 (GTA5_Enhanced.exe)" << std::endl;
         std::cout << "2. 以管理员身份运行此程序" << std::endl;
         std::cout << "3. 检查防病毒软件是否阻止" << std::endl;
 
