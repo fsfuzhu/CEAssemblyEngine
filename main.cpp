@@ -10,7 +10,7 @@ int main() {
     // Original CE script - @f jumps to next label (not necessarily @@)
     std::string scriptContent = R"(
 [ENABLE]
-aobscanmodule(aobplayer,GTA5_Enhanced.exe,48 8B 40 08 48 85 C0 0F 84 FD 00 00 00 F3 0F 10 80 15 18 00 00 0F 2E 80 80 02 00 00 0F 87 E8 00 00 00)
+aobscanmodule(aobplayer,GTA5_Enhanced.exe,48 8B 40 08 48 85 C0 0F 84 FD 00 00 00 F3 0F 10 80 18 15 00 00)
 alloc(newmem,$1000,aobplayer)
 label(code)
 label(return)
