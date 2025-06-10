@@ -96,6 +96,7 @@ private:
 
     // Assembly instruction processing
     bool ProcessAssemblyInstruction(const std::string& line);
+    std::string ProcessFloatConversion(const std::string& line);
     bool ProcessAssemblyBatch(const std::vector<std::string>& instructions, uintptr_t startAddress);
     bool ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr);
     bool WriteBytes(const std::vector<uint8_t>& bytes);

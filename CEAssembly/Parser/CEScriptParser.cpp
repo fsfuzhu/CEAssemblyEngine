@@ -34,6 +34,25 @@ bool CEScriptParser::ParseScript(const std::string& content) {
             continue;
         }
 
+        // 特殊处理多标签声明 (如: label(health armor player location))
+        if (inEnableBlock && line.find("label(") == 0 && line.find(" ") != std::string::npos) {
+            // 提取括号内的内容
+            size_t start = line.find('(') + 1;
+            size_t end = line.find(')', start);
+            if (end != std::string::npos) {
+                std::string labelsStr = line.substr(start, end - start);
+
+                // 按空格分割标签
+                std::istringstream labelStream(labelsStr);
+                std::string label;
+                while (labelStream >> label) {
+                    std::string labelLine = "label(" + label + ")";
+                    m_enableBlock.push_back(labelLine);
+                }
+                continue;
+            }
+        }
+
         // 添加到相应的块
         if (inEnableBlock) {
             m_enableBlock.push_back(line);

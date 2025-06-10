@@ -124,9 +124,9 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 	m_patches.clear();
 	m_currentAddress = 0;
 	m_anonymousLabels.clear();
-	m_allLabels.clear();  // Clear all labels
+	m_allLabels.clear();
 
-	// First pass: Process commands and establish symbols
+	// Pass 1: 处理命令
 	LOG_DEBUG("=== Pass 1: Processing commands ===");
 	for (const auto& line : lines) {
 		ParsedCommand cmd = m_parser->ParseLine(line);
@@ -134,28 +134,24 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 		switch (cmd.type) {
 		case CommandType::AOBSCANMODULE:
 			if (!ProcessAobScanModule(line)) {
-				LOG_ERROR_F("EnableBlock error : %s", m_lastError.c_str());
 				return false;
 			}
 			break;
 
 		case CommandType::ALLOC:
 			if (!ProcessAlloc(line)) {
-				LOG_ERROR_F("EnableBlock error : %s", m_lastError.c_str());
 				return false;
 			}
 			break;
 
 		case CommandType::LABEL:
 			if (!ProcessLabel(line)) {
-				LOG_ERROR_F("EnableBlock error : %s", m_lastError.c_str());
 				return false;
 			}
 			break;
 
 		case CommandType::REGISTERSYMBOL:
 			if (!ProcessRegisterSymbol(line)) {
-				LOG_ERROR_F("EnableBlock error : %s", m_lastError.c_str());
 				return false;
 			}
 			break;
@@ -165,7 +161,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 		}
 	}
 
-	// Second pass: Process assembly and label definitions
+	// Pass 2: 处理汇编指令和标签定义，收集延迟指令
 	LOG_DEBUG("=== Pass 2: Processing assembly and labels ===");
 	std::vector<DelayedInstruction> delayedInstructions;
 
@@ -174,17 +170,16 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 
 		if (cmd.type == CommandType::ASSEMBLY) {
 			if (!line.empty() && line.back() == ':') {
-				// Label definition
+				// 标签定义
 				std::string labelName = line.substr(0, line.length() - 1);
 
-				// Check for anonymous label
 				if (labelName == "@@") {
 					m_anonymousLabels.push_back(m_currentAddress);
-					m_allLabels[m_currentAddress] = "@@";  // Track in all labels
+					m_allLabels[m_currentAddress] = "@@";
 					LOG_DEBUG_F("Anonymous label @@ at 0x%llX", m_currentAddress);
 				}
 				else {
-					// Handle label+offset syntax (e.g., newmem+200)
+					// 处理 label+offset 语法
 					size_t plusPos = labelName.find('+');
 					if (plusPos != std::string::npos) {
 						std::string baseName = labelName.substr(0, plusPos);
@@ -199,73 +194,48 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 						}
 					}
 					else {
-						uintptr_t addr = 0;
-						if (m_symbolManager->GetSymbolAddress(labelName, addr) && addr != 0) {
-							// Label with existing address
-							m_currentAddress = addr;
-							m_allLabels[m_currentAddress] = labelName;  // Track in all labels
-							LOG_DEBUG_F("Label %s: current address = 0x%llX", labelName.c_str(), addr);
+						// 常规标签处理
+						uintptr_t existingAddr = 0;
+						if (m_symbolManager->GetSymbolAddress(labelName, existingAddr) && existingAddr != 0) {
+							// 标签已经有地址（如alloc分配的），使用该地址
+							m_currentAddress = existingAddr;
+							LOG_DEBUG_F("Label %s: using existing address 0x%llX", labelName.c_str(), existingAddr);
 						}
 						else {
-							// New label
-							if (m_currentAddress != 0) {
-								m_symbolManager->RegisterSymbol(labelName, m_currentAddress, 0, true);
-								m_allLabels[m_currentAddress] = labelName;  // Track in all labels
-								LOG_DEBUG_F("Label %s: registered at 0x%llX", labelName.c_str(), m_currentAddress);
-							}
-							else {
-								LOG_ERROR_F("Label %s has no context address", labelName.c_str());
-								m_lastError = "Label has no context address: " + labelName;
+							// 新标签，更新为当前地址
+							if (m_currentAddress == 0) {
+								LOG_ERROR_F("Label %s has no valid address context", labelName.c_str());
+								m_lastError = "Label has no valid address context: " + labelName;
 								return false;
 							}
+							m_symbolManager->RegisterSymbol(labelName, m_currentAddress, 0, true);
+							LOG_DEBUG_F("Label %s: registered at 0x%llX", labelName.c_str(), m_currentAddress);
 						}
+
+						m_allLabels[m_currentAddress] = labelName;
 					}
 				}
 			}
 			else {
-				// Assembly instruction
+				// 汇编指令
 				uintptr_t instructionAddress = m_currentAddress;
 				if (!ProcessAssemblyInstruction(line)) {
-					// Processing failed, add to delayed list
+					// 处理失败，添加到延迟列表（但不估算大小）
 					DelayedInstruction delayed;
 					delayed.instruction = line;
 					delayed.address = instructionAddress;
 					delayedInstructions.push_back(delayed);
 					LOG_DEBUG_F("Delaying instruction at 0x%llX: %s", instructionAddress, line.c_str());
 
-					// Estimate instruction size for address update
-					std::istringstream iss(line);
-					std::string op;
-					iss >> op;
-					std::transform(op.begin(), op.end(), op.begin(), ::tolower);
-
-					if (op == "jmp" || op == "call") {
-						m_currentAddress += 5; // Assume E9 jump
-					}
-					else if (op == "je" || op == "jne" || op == "jg" || op == "jl" || op == "jge" || op == "jle") {
-						m_currentAddress += 2; // Short conditional jump
-					}
-					else if (op == "dd") {
-						m_currentAddress += 4;
-					}
-					else if (op == "dq") {
-						m_currentAddress += 8;
-					}
-					else if (op == "db") {
-						m_currentAddress += 1;
-					}
-					else if (op == "dw") {
-						m_currentAddress += 2;
-					}
-					else {
-						m_currentAddress += 4; // Default estimate
-					}
+					// 不更新地址，保持当前位置
+					// m_currentAddress 保持不变，等待成功的指令更新它
 				}
+				// 如果成功，ProcessAssemblyInstruction 会自动更新 m_currentAddress
 			}
 		}
 	}
 
-	// Third pass: Process delayed instructions
+	// Pass 3: 处理延迟指令
 	LOG_DEBUG("=== Pass 3: Processing delayed instructions ===");
 	for (const auto& delayed : delayedInstructions) {
 		uintptr_t savedAddress = m_currentAddress;
@@ -278,7 +248,8 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 			return false;
 		}
 
-		m_currentAddress = savedAddress;
+		// 不恢复地址，让它自然增长
+		// m_currentAddress 现在包含了这个指令后的地址
 	}
 
 	LOG_DEBUG("=== Enable block processing completed ===");
@@ -286,7 +257,6 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 }
 
 bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
-	// Validate current address
 	if (m_currentAddress == 0) {
 		LOG_ERROR("Cannot process instruction without current address");
 		m_lastError = "No current address set";
@@ -295,17 +265,15 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 
 	LOG_DEBUG_F("Processing instruction: %s", line.c_str());
 
-	// Extract opcode for special handling
+	// 提取操作码进行特殊处理
 	std::string opcode;
 	std::istringstream lineStream(line);
 	lineStream >> opcode;
 	std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
 
-	// Special handling for NOP instruction
+	// NOP指令特殊处理
 	if (opcode == "nop") {
 		int nopCount = 1;
-
-		// Try to read count parameter
 		std::string countStr;
 		if (lineStream >> countStr) {
 			try {
@@ -315,30 +283,27 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 				nopCount = 1;
 			}
 		}
-
-		// Generate NOP bytes
 		std::vector<uint8_t> nopBytes(nopCount, 0x90);
 		LOG_DEBUG_F("Generating %d NOP byte(s)", nopCount);
-
 		return WriteBytes(nopBytes);
 	}
 
-	// Special handling for data definition directives
+	// 数据定义指令特殊处理
 	if (opcode == "dd" || opcode == "db" || opcode == "dw" || opcode == "dq") {
 		return ProcessDataDirective(line);
 	}
 
-	// Special handling for float/double immediate values
+	// 进行符号替换
 	std::string processedLine = line;
 
-	// Convert (float)value syntax
+	// 处理 (float) 转换
 	size_t floatPos = processedLine.find("(float)");
 	if (floatPos != std::string::npos) {
-		// Extract the value after (float)
+		// 提取 (float) 后的值
 		size_t valueStart = floatPos + 7; // length of "(float)"
 		size_t valueEnd = valueStart;
 
-		// Find end of value
+		// 找到值的结尾
 		while (valueEnd < processedLine.length() &&
 			(std::isdigit(processedLine[valueEnd]) ||
 				processedLine[valueEnd] == '.' ||
@@ -349,22 +314,19 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		std::string floatValueStr = processedLine.substr(valueStart, valueEnd - valueStart);
 		float floatValue = std::stof(floatValueStr);
 
-		// For mov instructions with float, we need to handle this specially
+		// 对于 mov 指令处理 float
 		if (opcode == "mov") {
-			// Convert to bytes
+			// 转换为字节
 			uint32_t floatBits = *reinterpret_cast<uint32_t*>(&floatValue);
 
-			// Extract destination
+			// 提取目标操作数
 			size_t commaPos = processedLine.find(',');
 			if (commaPos != std::string::npos) {
 				std::string dest = processedLine.substr(3, commaPos - 3);
 				dest.erase(0, dest.find_first_not_of(" \t"));
 				dest.erase(dest.find_last_not_of(" \t") + 1);
 
-				// Replace symbols in destination
-				dest = ReplaceSymbols(dest);
-
-				// Build new instruction
+				// 构建新指令
 				std::stringstream newInst;
 				newInst << "mov dword ptr " << dest << ", 0x" << std::hex << floatBits;
 				processedLine = newInst.str();
@@ -374,28 +336,29 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		}
 	}
 
-	// Always perform symbol replacement first
+	// 执行符号替换
 	processedLine = ReplaceSymbols(processedLine);
 
-	// Log transformation if changed
+	// 记录符号替换结果
 	if (processedLine != line) {
 		LOG_DEBUG_F("Symbol replacement: %s -> %s", line.c_str(), processedLine.c_str());
 	}
 
-	// Special handling for @f and @b labels
+	// 特殊处理 @f 和 @b 标签
 	if (processedLine.find("@f") != std::string::npos ||
 		processedLine.find("@b") != std::string::npos) {
-		return ProcessCESpecialJump(line); // Use original line, not processed
+		return ProcessCESpecialJump(line);
 	}
 
-	// Special handling for mov instructions with large immediates
+	// 特殊处理包含大立即数的 mov 指令
 	if (opcode == "mov" && processedLine.find(",0x") != std::string::npos) {
-		return ProcessSpecialMovInstruction(processedLine);
+		if (ProcessSpecialMovInstruction(processedLine)) {
+			return true;
+		}
 	}
 
-	// Special handling for cmp instructions with immediates
+	// 特殊处理 cmp 指令的立即数
 	if (opcode == "cmp" && processedLine.find(",0x") != std::string::npos) {
-		// Force dword ptr for cmp with immediates
 		size_t bracketPos = processedLine.find('[');
 		if (bracketPos != std::string::npos) {
 			processedLine.insert(bracketPos, "dword ptr ");
@@ -403,12 +366,12 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		}
 	}
 
-	// Prepare for assembly
+	// 准备汇编
 	unsigned char* machineCode = nullptr;
 	size_t codeSize = 0;
 	size_t statements = 0;
 
-	// Assemble the processed instruction
+	// 汇编处理后的指令
 	LOG_TRACE_F("Assembling at 0x%llX: %s", m_currentAddress, processedLine.c_str());
 
 	int asmResult = ks_asm(m_ksEngine,
@@ -418,10 +381,10 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		&codeSize,
 		&statements);
 
-	// Handle assembly result
+	// 处理汇编结果
 	if (asmResult == KS_ERR_OK) {
 		if (codeSize > 0) {
-			// Success with generated code
+			// 成功生成代码
 			std::vector<uint8_t> bytes(machineCode, machineCode + codeSize);
 			ks_free(machineCode);
 
@@ -429,52 +392,54 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 			return WriteBytes(bytes);
 		}
 		else {
-			// Success but no code (label or directive)
+			// 成功但无代码生成（标签或指示符）
 			LOG_DEBUG("No machine code generated (label/directive)");
 			return true;
 		}
 	}
 
-	// Assembly failed
+	// 汇编失败 - 检查是否是符号问题（可以延迟处理）
 	ks_err error = ks_errno(m_ksEngine);
-	LOG_DEBUG_F("Assembly failed: %s", ks_strerror(error));
 
-	// Check if it's a jump instruction with unresolved symbol
-	std::istringstream processedStream(processedLine);
-	std::string processedOp;
-	processedStream >> processedOp;
-	std::transform(processedOp.begin(), processedOp.end(), processedOp.begin(), ::tolower);
-
-	// Handle jump/call instructions
-	if (processedOp == "jmp" || processedOp == "call" ||
-		(processedOp.size() > 0 && processedOp[0] == 'j')) {
-
-		std::string target;
-		processedStream >> target;
-
-		// Check if target is a symbol
-		if (!target.empty() && (std::isalpha(target[0]) || target[0] == '_')) {
-			uintptr_t targetAddr = 0;
-
-			if (m_symbolManager->GetSymbolAddress(target, targetAddr)) {
-				if (targetAddr != 0) {
-					// Generate jump instruction
-					LOG_DEBUG_F("Generating jump to %s (0x%llX)", target.c_str(), targetAddr);
-					return ProcessJumpInstruction(processedOp, targetAddr);
-				}
-				else {
-					// Forward reference
-					LOG_DEBUG_F("Forward reference: %s", target.c_str());
-					return false;
-				}
-			}
-		}
+	if (error == KS_ERR_ASM_SYMBOL_MISSING) {
+		// 符号缺失，可以延迟处理
+		LOG_DEBUG_F("Symbol missing, can be delayed: %s", processedLine.c_str());
+		return false;
 	}
 
-	// Final error
+	// 其他汇编错误
 	LOG_ERROR_F("Failed to assemble: %s", processedLine.c_str());
 	m_lastError = std::string("Assembly error: ") + ks_strerror(error);
 	return false;
+}
+
+// 新增：Float转换处理函数
+std::string CEAssemblyEngine::ProcessFloatConversion(const std::string& line) {
+	std::string result = line;
+
+	size_t floatPos = result.find("(float)");
+	while (floatPos != std::string::npos) {
+		size_t valueStart = floatPos + 7;
+		size_t valueEnd = valueStart;
+
+		while (valueEnd < result.length() &&
+			(std::isdigit(result[valueEnd]) || result[valueEnd] == '.' || result[valueEnd] == '-')) {
+			valueEnd++;
+		}
+
+		std::string floatValueStr = result.substr(valueStart, valueEnd - valueStart);
+		float floatValue = std::stof(floatValueStr);
+		uint32_t floatBits = *reinterpret_cast<uint32_t*>(&floatValue);
+
+		std::stringstream hexValue;
+		hexValue << "0x" << std::hex << floatBits;
+
+		result.replace(floatPos, valueEnd - floatPos, hexValue.str());
+
+		floatPos = result.find("(float)", floatPos + hexValue.str().length());
+	}
+
+	return result;
 }
 
 // New helper function for special mov instructions
@@ -781,7 +746,7 @@ bool CEAssemblyEngine::ProcessRegisterSymbol(const std::string& line) {
 std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 	LOG_TRACE_F("Symbol replacement input: %s", line.c_str());
 
-	// Tokenizer state
+	// 符号化状态
 	enum TokenType {
 		TK_WHITESPACE,
 		TK_OPCODE,
@@ -803,11 +768,11 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 	std::vector<Token> tokens;
 	size_t i = 0;
 
-	// Tokenization phase
+	// 分词阶段
 	while (i < line.length()) {
 		Token token;
 
-		// Whitespace
+		// 空白字符
 		if (std::isspace(line[i])) {
 			token.type = TK_WHITESPACE;
 			while (i < line.length() && std::isspace(line[i])) {
@@ -817,7 +782,7 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
-		// Check for @f, @b (CE special labels) - DON'T convert these
+		// 检查 @f, @b (CE特殊标签) - 不转换这些
 		if (line[i] == '@' && i + 1 < line.length()) {
 			if (line[i + 1] == 'f' || line[i + 1] == 'b') {
 				token.type = TK_SPECIAL;
@@ -829,7 +794,7 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			}
 		}
 
-		// Check for type casts like (float), (double)
+		// 检查类型转换如 (float), (double)
 		if (line[i] == '(' && i + 1 < line.length()) {
 			size_t closePos = line.find(')', i);
 			if (closePos != std::string::npos) {
@@ -846,7 +811,7 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			}
 		}
 
-		// Punctuation
+		// 标点符号
 		if (line[i] == ',' || line[i] == '[' || line[i] == ']' ||
 			line[i] == '(' || line[i] == ')' || line[i] == ':') {
 			token.type = TK_PUNCTUATION;
@@ -855,7 +820,7 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
-		// Operators
+		// 运算符
 		if (line[i] == '+' || line[i] == '-' || line[i] == '*') {
 			token.type = TK_OPERATOR;
 			token.text = line[i++];
@@ -863,9 +828,9 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
-		// $ prefix (CE hex notation)
+		// $ 前缀 (CE十六进制记法)
 		if (line[i] == '$') {
-			i++; // Skip $
+			i++; // 跳过 $
 			token.type = TK_NUMBER;
 			std::string hexNum;
 			while (i < line.length() && std::isxdigit(line[i])) {
@@ -877,22 +842,22 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
-		// # prefix (immediate value)
+		// # 前缀 (立即数)
 		if (line[i] == '#') {
-			i++; // Skip #
+			i++; // 跳过 #
 			token.type = TK_NUMBER;
 			std::string num;
 			while (i < line.length() && std::isdigit(line[i])) {
 				num += line[i++];
 			}
-			// Keep as decimal
+			// 保持为十进制
 			token.text = num;
 			tokens.push_back(token);
 			LOG_TRACE_F("Immediate: #%s -> %s", num.c_str(), token.text.c_str());
 			continue;
 		}
 
-		// 0x prefix
+		// 0x 前缀
 		if (i + 2 <= line.length() && line[i] == '0' &&
 			(line[i + 1] == 'x' || line[i + 1] == 'X')) {
 			token.type = TK_NUMBER;
@@ -905,7 +870,7 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
-		// Alphanumeric sequence
+		// 字母数字序列
 		if (std::isalnum(line[i]) || line[i] == '_') {
 			std::string word;
 			size_t start = i;
@@ -914,45 +879,31 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 				word += line[i++];
 			}
 
-			// Determine type
+			// 确定类型
 			std::string lowerWord = word;
 			std::transform(lowerWord.begin(), lowerWord.end(), lowerWord.begin(), ::tolower);
 
-			// First token is usually opcode
+			// 第一个词通常是操作码
 			if (tokens.empty() || (tokens.size() > 0 &&
 				tokens.back().type == TK_PUNCTUATION && tokens.back().text == ":")) {
 				token.type = TK_OPCODE;
 			}
-			// Check if register
+			// 检查是否为寄存器
 			else if (isX64RegisterName(lowerWord)) {
 				token.type = TK_REGISTER;
 			}
-			// Check if pure number (all hex digits) - but NOT if it's 'f' or 'b' after '@'
+			// 检查是否为纯数字（全为十六进制数字）
 			else if (std::all_of(word.begin(), word.end(),
 				[](char c) { return std::isxdigit(c); })) {
 
-				// Check if previous token was '@'
-				bool afterAt = false;
-				if (tokens.size() >= 2) {
-					const Token& prevToken = tokens[tokens.size() - 1];
-					const Token& prevPrevToken = tokens[tokens.size() - 2];
-					if (prevToken.type == TK_OPERATOR && prevToken.text == "@" ||
-						(prevPrevToken.type == TK_OPERATOR && prevPrevToken.text == "@" &&
-							prevToken.type == TK_WHITESPACE)) {
-						afterAt = true;
-					}
-				}
-
-				if (!afterAt) {
-					token.type = TK_NUMBER;
-					// Add 0x prefix to all numbers
-					token.text = "0x" + word;
-					LOG_TRACE_F("Auto-hex: %s -> %s", word.c_str(), token.text.c_str());
-					tokens.push_back(token);
-					continue;
-				}
+				token.type = TK_NUMBER;
+				// 为所有数字添加 0x 前缀
+				token.text = "0x" + word;
+				LOG_TRACE_F("Auto-hex: %s -> %s", word.c_str(), token.text.c_str());
+				tokens.push_back(token);
+				continue;
 			}
-			// Otherwise it's a symbol
+			// 其他情况为符号
 			else {
 				token.type = TK_SYMBOL;
 			}
@@ -962,59 +913,36 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
-		// Unknown character
+		// 未知字符
 		token.type = TK_UNKNOWN;
 		token.text = line[i++];
 		tokens.push_back(token);
 	}
 
-	// Build result
+	// 构建结果
 	std::string result;
 
 	for (size_t idx = 0; idx < tokens.size(); idx++) {
 		const Token& tok = tokens[idx];
 
 		if (tok.type == TK_SYMBOL) {
-			// Check if it's a jump target
-			bool isJumpTarget = false;
+			// 尝试解析符号
+			uint64_t capturedVal;
+			uintptr_t symbolAddr;
 
-			// Look backward for opcode
-			for (int j = idx - 1; j >= 0; j--) {
-				if (tokens[j].type == TK_OPCODE) {
-					std::string op = tokens[j].text;
-					std::transform(op.begin(), op.end(), op.begin(), ::tolower);
-					if (op == "jmp" || op == "call" ||
-						(op.length() > 0 && op[0] == 'j')) {
-						isJumpTarget = true;
-					}
-					break;
-				}
-				else if (tokens[j].type != TK_WHITESPACE) {
-					break;
-				}
+			if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
+				result += std::to_string(capturedVal);
+				LOG_DEBUG_F("Symbol %s -> captured %llu", tok.text.c_str(), capturedVal);
 			}
-
-			if (!isJumpTarget) {
-				// Try to resolve symbol
-				uint64_t capturedVal;
-				uintptr_t symbolAddr;
-
-				if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
-					result += std::to_string(capturedVal);
-					LOG_DEBUG_F("Symbol %s -> captured %llu", tok.text.c_str(), capturedVal);
-				}
-				else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr) &&
-					symbolAddr != 0) {
-					std::stringstream ss;
-					ss << "0x" << std::hex << symbolAddr;
-					result += ss.str();
-					LOG_DEBUG_F("Symbol %s -> 0x%llX", tok.text.c_str(), symbolAddr);
-				}
-				else {
-					result += tok.text;
-				}
+			else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr) &&
+				symbolAddr != 0) {
+				std::stringstream ss;
+				ss << "0x" << std::hex << symbolAddr;
+				result += ss.str();
+				LOG_DEBUG_F("Symbol %s -> 0x%llX", tok.text.c_str(), symbolAddr);
 			}
 			else {
+				// 符号未找到，保持原样
 				result += tok.text;
 			}
 		}
