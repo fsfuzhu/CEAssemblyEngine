@@ -5,6 +5,7 @@
 #include "Scanner/PatternScanner.h"
 #include "MemoryManager.h"
 #include "Parser/CEScriptParser.h"
+#include "asmjit/x86.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -12,6 +13,14 @@
 #include <set>      // 新增：用于ContainsUnresolvedSymbols
 #include <map>      // 新增：用于ReplaceSymbols
 #include <cctype>   // 新增：用于std::isalpha
+
+bool isX64RegisterName(const std::string& token) {
+	static const std::regex regPattern(
+		R"(^(r(1[0-5]|[8-9]|[abcd]x|sp|bp|si|di)|e[a-d]x|e(si|di|bp|sp)|[abcd][hl]|[rs]i|[rs]p|rip|xmm\d+|ymm\d+|st\d+)$)",
+		std::regex::icase);
+	return std::regex_match(token, regPattern);
+}
+
 CEAssemblyEngine::CEAssemblyEngine()
 	: m_memoryManager(std::make_unique<MemoryManager>())
 	, m_patternScanner(std::make_unique<PatternScanner>())
@@ -321,20 +330,8 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 	}
 }
 
-bool CEAssemblyEngine::ContainsUnresolvedSymbols(const std::string& line) {
-	// 常见的寄存器名和指令，不应被视为符号
-	static const std::set<std::string> registers = {
-		"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp",
-		"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
-		"eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
-		"ax", "bx", "cx", "dx", "si", "di", "sp", "bp",
-		"al", "bl", "cl", "dl", "ah", "bh", "ch", "dh",
-		// 添加常见指令
-		"mov", "add", "sub", "push", "pop", "call", "jmp",
-		"je", "jne", "jz", "jnz", "jg", "jl", "jge", "jle",
-		"inc", "dec", "nop", "ret", "lea", "cmp", "test"
-	};
 
+bool CEAssemblyEngine::ContainsUnresolvedSymbols(const std::string& line) {
 	std::regex symbolRegex(R"(\b([a-zA-Z_]\w*)\b)");
 	std::smatch match;
 	std::string temp = line;
@@ -348,28 +345,29 @@ bool CEAssemblyEngine::ContainsUnresolvedSymbols(const std::string& line) {
 
 		LOG_TRACE_F("Found potential symbol: %s", symbol.c_str());
 
-		// 如果不是寄存器/指令且不是已知符号，则为未解析
-		if (registers.find(lowerSymbol) == registers.end()) {
-			uintptr_t addr;
-			uint64_t value;
-			if (!m_symbolManager->GetSymbolAddress(symbol, addr) &&
-				!m_symbolManager->GetCapturedValue(symbol, value)) {
-				LOG_DEBUG_F("Unresolved symbol found: %s", symbol.c_str());
-				return true;
-			}
-			else {
-				LOG_TRACE_F("Symbol %s is resolved", symbol.c_str());
-			}
+		// 【先判寄存器和指令，如果是，直接跳过】
+		if (isX64RegisterName(lowerSymbol)) {
+			LOG_TRACE_F("Symbol %s is a register/instruction", symbol.c_str());
+			temp = match.suffix();
+			continue;
+		}
+
+		// 再判符号表和捕获变量
+		uintptr_t addr;
+		uint64_t value;
+		if (!m_symbolManager->GetSymbolAddress(symbol, addr) &&
+			!m_symbolManager->GetCapturedValue(symbol, value)) {
+			LOG_DEBUG_F("Unresolved symbol found: %s", symbol.c_str());
+			return true;
 		}
 		else {
-			LOG_TRACE_F("Symbol %s is a register/instruction", symbol.c_str());
+			LOG_TRACE_F("Symbol %s is resolved (user symbol or captured value)", symbol.c_str());
 		}
-
 		temp = match.suffix();
 	}
-
 	return false;
 }
+
 
 bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr) {
 	std::string op = opcode;
@@ -629,16 +627,18 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		std::transform(lowerSymbol.begin(), lowerSymbol.end(), lowerSymbol.begin(), ::tolower);
 
 		// 跳过寄存器和指令名
-		static const std::set<std::string> skipSymbols = {
-			"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp",
-			"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
-			"eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
-			"ax", "bx", "cx", "dx", "si", "di", "sp", "bp",
-			"al", "bl", "cl", "dl", "ah", "bh", "ch", "dh",
-			"mov", "add", "sub", "push", "pop", "call", "jmp"
-		};
+		//static const std::set<std::string> skipSymbols = {
+		//	"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp",
+		//	"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+		//	"r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d",
+		//	"eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
+		//	"ax", "bx", "cx", "dx", "si", "di", "sp", "bp",
+		//	"al", "bl", "cl", "dl", "ah", "bh", "ch", "dh",
+		//	"mov", "add", "sub", "push", "pop", "call", "jmp","xor",
+		//	"and", "or", "shl", "shr", "rol", "ror", "sar", "sal",
+		//};
 
-		if (skipSymbols.find(lowerSymbol) != skipSymbols.end()) {
+		if (isX64RegisterName(lowerSymbol)) {
 			temp = match.suffix();
 			continue;
 		}
