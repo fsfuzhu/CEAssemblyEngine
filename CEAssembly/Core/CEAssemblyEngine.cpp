@@ -219,16 +219,23 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 			else {
 				// 汇编指令
 				uintptr_t instructionAddress = m_currentAddress;
+
+				// 先估算指令大小，即使符号未解析
+				size_t estimatedSize = EstimateInstructionSize(line);
+
 				if (!ProcessAssemblyInstruction(line)) {
-					// 处理失败，添加到延迟列表（但不估算大小）
+					// 处理失败，添加到延迟列表
 					DelayedInstruction delayed;
 					delayed.instruction = line;
 					delayed.address = instructionAddress;
 					delayedInstructions.push_back(delayed);
-					LOG_DEBUG_F("Delaying instruction at 0x%llX: %s", instructionAddress, line.c_str());
+					LOG_DEBUG_F("Delaying instruction at 0x%llX: %s (estimated size: %zu)",
+						instructionAddress, line.c_str(), estimatedSize);
 
-					// 不更新地址，保持当前位置
-					// m_currentAddress 保持不变，等待成功的指令更新它
+					// 即使处理失败，也要更新地址以保持准确性
+					if (estimatedSize > 0) {
+						m_currentAddress = instructionAddress + estimatedSize;
+					}
 				}
 				// 如果成功，ProcessAssemblyInstruction 会自动更新 m_currentAddress
 			}
@@ -238,7 +245,6 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 	// Pass 3: 处理延迟指令
 	LOG_DEBUG("=== Pass 3: Processing delayed instructions ===");
 	for (const auto& delayed : delayedInstructions) {
-		uintptr_t savedAddress = m_currentAddress;
 		m_currentAddress = delayed.address;
 
 		if (!ProcessAssemblyInstruction(delayed.instruction)) {
@@ -247,13 +253,304 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 			m_lastError = "Failed to process delayed instruction: " + delayed.instruction;
 			return false;
 		}
-
-		// 不恢复地址，让它自然增长
-		// m_currentAddress 现在包含了这个指令后的地址
 	}
 
 	LOG_DEBUG("=== Enable block processing completed ===");
 	return true;
+}
+
+size_t CEAssemblyEngine::EstimateInstructionSize(const std::string& line) {
+	if (m_currentAddress == 0) {
+		return 0;
+	}
+
+	// 提取操作码进行特殊处理
+	std::string opcode;
+	std::istringstream lineStream(line);
+	lineStream >> opcode;
+	std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+
+	// NOP指令特殊处理
+	if (opcode == "nop") {
+		int nopCount = 1;
+		std::string countStr;
+		if (lineStream >> countStr) {
+			try {
+				nopCount = std::stoi(countStr);
+			}
+			catch (...) {
+				nopCount = 1;
+			}
+		}
+		return nopCount;
+	}
+
+	// 数据定义指令特殊处理
+	if (opcode == "db") return 1;
+	if (opcode == "dw") return 2;
+	if (opcode == "dd") return 4;
+	if (opcode == "dq") return 8;
+
+	// 使用临时符号替换来估算大小
+	std::string processedLine = ReplaceSymbolsForEstimation(line);
+
+	// 使用Keystone估算大小
+	unsigned char* machineCode = nullptr;
+	size_t codeSize = 0;
+	size_t statements = 0;
+
+	int asmResult = ks_asm(m_ksEngine,
+		processedLine.c_str(),
+		m_currentAddress,
+		&machineCode,
+		&codeSize,
+		&statements);
+
+	if (asmResult == KS_ERR_OK && codeSize > 0) {
+		ks_free(machineCode);
+		LOG_TRACE_F("Estimated size for '%s': %zu bytes", line.c_str(), codeSize);
+		return codeSize;
+	}
+
+	// 如果Keystone失败，使用启发式方法估算
+	LOG_TRACE_F("Keystone estimation failed for '%s', using heuristics", line.c_str());
+
+	// 常见指令的默认大小
+	if (opcode == "push" || opcode == "pop") return 1;
+	if (opcode == "mov" && line.find("ptr") != std::string::npos) return 7; // mov with memory
+	if (opcode == "jmp" || opcode == "call") return 5; // near jump/call
+	if (opcode == "je" || opcode == "jne" || opcode == "jg" || opcode == "jl") return 2; // short conditional jump
+	if (opcode == "cmp" && line.find("ptr") != std::string::npos) return 7; // cmp with memory
+	if (opcode == "lea") return 7; // lea is typically 7 bytes
+	if (opcode == "test") return 3; // test reg,reg
+	if (opcode == "movss" || opcode == "movsd") return 4; // SSE moves
+
+	// 默认返回5字节（保守估计）
+	return 5;
+}
+
+std::string CEAssemblyEngine::ReplaceSymbolsForEstimation(const std::string& line) {
+	// This function is similar to ReplaceSymbols but uses placeholder addresses for unknown symbols
+	LOG_TRACE_F("Symbol replacement for estimation input: %s", line.c_str());
+
+	// Process float conversions first
+	std::string processedLine = line;
+	size_t floatPos = processedLine.find("(float)");
+	if (floatPos != std::string::npos) {
+		// Extract value after (float)
+		size_t valueStart = floatPos + 7; // length of "(float)"
+		size_t valueEnd = valueStart;
+
+		// Find end of value
+		while (valueEnd < processedLine.length() &&
+			(std::isdigit(processedLine[valueEnd]) ||
+				processedLine[valueEnd] == '.' ||
+				processedLine[valueEnd] == '-')) {
+			valueEnd++;
+		}
+
+		std::string floatValueStr = processedLine.substr(valueStart, valueEnd - valueStart);
+		float floatValue = std::stof(floatValueStr);
+
+		// Extract opcode
+		std::string opcode;
+		std::istringstream lineStream(processedLine);
+		lineStream >> opcode;
+		std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+
+		// Process float for mov instruction
+		if (opcode == "mov") {
+			// Convert to bytes
+			uint32_t floatBits = *reinterpret_cast<uint32_t*>(&floatValue);
+
+			// Extract destination operand
+			size_t commaPos = processedLine.find(',');
+			if (commaPos != std::string::npos) {
+				std::string dest = processedLine.substr(3, commaPos - 3);
+				dest.erase(0, dest.find_first_not_of(" \t"));
+				dest.erase(dest.find_last_not_of(" \t") + 1);
+
+				// Build new instruction
+				std::stringstream newInst;
+				newInst << "mov dword ptr " << dest << ", 0x" << std::hex << floatBits;
+				processedLine = newInst.str();
+			}
+		}
+	}
+
+	// Use complete tokenization logic from ReplaceSymbols
+	enum TokenType {
+		TK_WHITESPACE,
+		TK_OPCODE,
+		TK_REGISTER,
+		TK_NUMBER,
+		TK_SYMBOL,
+		TK_OPERATOR,
+		TK_PUNCTUATION,
+		TK_SPECIAL,
+		TK_TYPECAST,
+		TK_UNKNOWN
+	};
+
+	struct Token {
+		TokenType type;
+		std::string text;
+	};
+
+	std::vector<Token> tokens;
+	size_t i = 0;
+
+	// Tokenization phase (same as ReplaceSymbols)
+	while (i < processedLine.length()) {
+		Token token;
+
+		// Whitespace
+		if (std::isspace(processedLine[i])) {
+			token.type = TK_WHITESPACE;
+			while (i < processedLine.length() && std::isspace(processedLine[i])) {
+				token.text += processedLine[i++];
+			}
+			tokens.push_back(token);
+			continue;
+		}
+
+		// Check @f, @b 
+		if (processedLine[i] == '@' && i + 1 < processedLine.length()) {
+			if (processedLine[i + 1] == 'f' || processedLine[i + 1] == 'b') {
+				token.type = TK_SPECIAL;
+				token.text = processedLine.substr(i, 2);
+				i += 2;
+				tokens.push_back(token);
+				continue;
+			}
+		}
+
+		// Punctuation
+		if (processedLine[i] == ',' || processedLine[i] == '[' || processedLine[i] == ']' ||
+			processedLine[i] == '(' || processedLine[i] == ')' || processedLine[i] == ':') {
+			token.type = TK_PUNCTUATION;
+			token.text = processedLine[i++];
+			tokens.push_back(token);
+			continue;
+		}
+
+		// Operators
+		if (processedLine[i] == '+' || processedLine[i] == '-' || processedLine[i] == '*') {
+			token.type = TK_OPERATOR;
+			token.text = processedLine[i++];
+			tokens.push_back(token);
+			continue;
+		}
+
+		// $ prefix (CE hex notation)
+		if (processedLine[i] == '$') {
+			i++; // skip $
+			token.type = TK_NUMBER;
+			std::string hexNum;
+			while (i < processedLine.length() && std::isxdigit(processedLine[i])) {
+				hexNum += processedLine[i++];
+			}
+			token.text = "0x" + hexNum;
+			tokens.push_back(token);
+			continue;
+		}
+
+		// 0x prefix
+		if (i + 2 <= processedLine.length() && processedLine[i] == '0' &&
+			(processedLine[i + 1] == 'x' || processedLine[i + 1] == 'X')) {
+			token.type = TK_NUMBER;
+			token.text = "0x";
+			i += 2;
+			while (i < processedLine.length() && std::isxdigit(processedLine[i])) {
+				token.text += processedLine[i++];
+			}
+			tokens.push_back(token);
+			continue;
+		}
+
+		// Alphanumeric sequences
+		if (std::isalnum(processedLine[i]) || processedLine[i] == '_') {
+			std::string word;
+			while (i < processedLine.length() && (std::isalnum(processedLine[i]) || processedLine[i] == '_')) {
+				word += processedLine[i++];
+			}
+
+			// Determine type
+			std::string lowerWord = word;
+			std::transform(lowerWord.begin(), lowerWord.end(), lowerWord.begin(), ::tolower);
+
+			// First word is usually opcode
+			if (tokens.empty() || (tokens.size() > 0 &&
+				tokens.back().type == TK_PUNCTUATION && tokens.back().text == ":")) {
+				token.type = TK_OPCODE;
+			}
+			// Check if register
+			else if (isX64RegisterName(lowerWord)) {
+				token.type = TK_REGISTER;
+			}
+			// Check if pure number (all hex digits)
+			else if (std::all_of(word.begin(), word.end(),
+				[](char c) { return std::isxdigit(c); })) {
+				token.type = TK_NUMBER;
+				token.text = "0x" + word;
+				tokens.push_back(token);
+				continue;
+			}
+			// Otherwise symbol
+			else {
+				token.type = TK_SYMBOL;
+			}
+
+			token.text = word;
+			tokens.push_back(token);
+			continue;
+		}
+
+		// Unknown character
+		token.type = TK_UNKNOWN;
+		token.text = processedLine[i++];
+		tokens.push_back(token);
+	}
+
+	// Build result, using placeholder addresses for unknown symbols
+	std::string result;
+	for (size_t idx = 0; idx < tokens.size(); idx++) {
+		const Token& tok = tokens[idx];
+
+		if (tok.type == TK_SYMBOL) {
+			// Try to resolve symbol
+			uint64_t capturedVal;
+			uintptr_t symbolAddr;
+
+			if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
+				result += std::to_string(capturedVal);
+			}
+			else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr) &&
+				symbolAddr != 0) {
+				std::stringstream ss;
+				ss << "0x" << std::hex << symbolAddr;
+				result += ss.str();
+			}
+			else {
+				// Unknown symbol, use placeholder address
+				// Use a reasonable address based on current address
+				if (m_currentAddress != 0) {
+					std::stringstream ss;
+					ss << "0x" << std::hex << m_currentAddress;
+					result += ss.str();
+				}
+				else {
+					result += "0x400000";  // Default base address
+				}
+			}
+		}
+		else {
+			result += tok.text;
+		}
+	}
+
+	LOG_TRACE_F("Symbol replacement for estimation output: %s", result.c_str());
+	return result;
 }
 
 bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {

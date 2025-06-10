@@ -101,6 +101,9 @@ private:
     bool ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr);
     bool WriteBytes(const std::vector<uint8_t>& bytes);
 
+    // Instruction size estimation
+    size_t EstimateInstructionSize(const std::string& line);
+    std::string ReplaceSymbolsForEstimation(const std::string& line);
     // Symbol replacement
     std::string ReplaceSymbols(const std::string& line);
 
