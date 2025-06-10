@@ -10,29 +10,50 @@ int main() {
     // 按照用户详细说明的脚本示例
     std::string scriptContent = R"(
 [ENABLE]
-aobscanmodule(fuckTest,Notepad.exe,41 81 F2 69 6E 65 49) // should be unique
-alloc(newmem,$1000,fuckTest)
+
+aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
+alloc(newmem,$1000,INJECT)
 
 label(code)
 label(return)
 
 newmem:
-
+  mov rax,10          // 应该变成 mov rax,0x10
+  mov rbx,#10         // 应该变成 mov rbx,10 (十进制)
+  mov rcx,$10         // 应该变成 mov rcx,0x10
+  mov rdx,0x10        // 应该保持 mov rdx,0x10
+  
+  // 测试包含A-F的十六进制
+  xor r10d,49656E69   // 应该变成 xor r10d,0x49656E69
+  mov eax,DEADBEEF    // 应该变成 mov eax,0xDEADBEEF
+  
+  // 测试运算符中的数字
+  mov rax,[rbx+10]    // 应该变成 mov rax,[rbx+0x10]
+  lea rdx,[rcx-20]    // 应该变成 lea rdx,[rcx-0x20]
+  add rax,30          // 应该变成 add rax,0x30
+  
+  // 测试其他指令
+  push 40             // 应该变成 push 0x40
+  sub rsp,50          // 应该变成 sub rsp,0x50
+  
+  mov r8,r9           // 寄存器不应该被改变
 code:
-  xor r10d,49656E69
+  mov rdx,[rax+r10]
+  mov rax,[rbx+10]
   jmp return
 
-fuckTest:
+INJECT:
   jmp newmem
-  nop 2
+  nop 3
 return:
-registersymbol(fuckTest)
+registersymbol(INJECT)
 
 [DISABLE]
-fuckTest:
-  db 41 81 F2 69 6E 65 49
 
-unregistersymbol(fuckTest)
+INJECT:
+  db 4A 8B 14 10 48 8B 43 10
+
+unregistersymbol(INJECT)
 dealloc(newmem)
 )";
 

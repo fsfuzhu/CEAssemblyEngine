@@ -97,7 +97,6 @@ private:
     bool ProcessAssemblyBatch(const std::vector<std::string>& instructions, uintptr_t startAddress);
     bool ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr);
     bool WriteBytes(const std::vector<uint8_t>& bytes);
-    bool ContainsUnresolvedSymbols(const std::string& line);
 
     // ·ûºÅÌæ»»
     std::string ReplaceSymbols(const std::string& line);

@@ -1,4 +1,4 @@
-#include "CEAssemblyEngine.h"
+ï»¿#include "CEAssemblyEngine.h"
 #include "Utils/DebugHelper.h"
 #include "CEScript.h"
 #include "Symbol/SymbolManager.h"
@@ -10,9 +10,9 @@
 #include <iomanip>
 #include <algorithm>
 #include <regex>
-#include <set>      // ĞÂÔö£ºÓÃÓÚContainsUnresolvedSymbols
-#include <map>      // ĞÂÔö£ºÓÃÓÚReplaceSymbols
-#include <cctype>   // ĞÂÔö£ºÓÃÓÚstd::isalpha
+#include <set>      // æ–°å¢ï¼šç”¨äºContainsUnresolvedSymbols
+#include <map>      // æ–°å¢ï¼šç”¨äºReplaceSymbols
+#include <cctype>   // æ–°å¢ï¼šç”¨äºstd::isalpha
 
 bool isX64RegisterName(const std::string& token) {
 	static const std::regex regPattern(
@@ -32,7 +32,7 @@ CEAssemblyEngine::CEAssemblyEngine()
 
 	LOG_INFO("CEAssemblyEngine constructor called");
 
-	// ³õÊ¼»¯ Keystone
+	// åˆå§‹åŒ– Keystone
 	ks_err err = ks_open(KS_ARCH_X86, KS_MODE_64, &m_ksEngine);
 	if (err != KS_ERR_OK) {
 		LOG_ERROR_F("Failed to initialize Keystone engine: %s", ks_strerror(err));
@@ -124,7 +124,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 	m_patches.clear();
 	m_currentAddress = 0;
 
-	// µÚÒ»±é£º´¦ÀíÃüÁî£¬½¨Á¢·ûºÅ±í
+	// ç¬¬ä¸€éï¼šå¤„ç†å‘½ä»¤ï¼Œå»ºç«‹ç¬¦å·è¡¨
 	LOG_DEBUG("=== Pass 1: Processing commands ===");
 	for (const auto& line : lines) {
 		ParsedCommand cmd = m_parser->ParseLine(line);
@@ -163,7 +163,7 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 		}
 	}
 
-	// µÚ¶ş±é£º´¦Àí»ã±àÖ¸ÁîºÍ±êÇ©¶¨Òå
+	// ç¬¬äºŒéï¼šå¤„ç†æ±‡ç¼–æŒ‡ä»¤å’Œæ ‡ç­¾å®šä¹‰
 	LOG_DEBUG("=== Pass 2: Processing assembly and labels ===");
 	std::vector<DelayedInstruction> delayedInstructions;
 
@@ -172,17 +172,17 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 
 		if (cmd.type == CommandType::ASSEMBLY) {
 			if (!line.empty() && line.back() == ':') {
-				// ±êÇ©¶¨Òå
+				// æ ‡ç­¾å®šä¹‰
 				std::string labelName = line.substr(0, line.length() - 1);
 				uintptr_t addr = 0;
 
 				if (m_symbolManager->GetSymbolAddress(labelName, addr) && addr != 0) {
-					// ÒÑÓĞµØÖ·µÄ±êÇ©£¨ÈçINJECT¡¢newmem£©
+					// å·²æœ‰åœ°å€çš„æ ‡ç­¾ï¼ˆå¦‚INJECTã€newmemï¼‰
 					m_currentAddress = addr;
 					LOG_DEBUG_F("Label %s: current address = 0x%llX", labelName.c_str(), addr);
 				}
 				else {
-					// ĞÂ±êÇ©£¬Ê¹ÓÃµ±Ç°µØÖ·
+					// æ–°æ ‡ç­¾ï¼Œä½¿ç”¨å½“å‰åœ°å€
 					if (m_currentAddress != 0) {
 						m_symbolManager->RegisterSymbol(labelName, m_currentAddress);
 						LOG_DEBUG_F("Label %s: registered at 0x%llX", labelName.c_str(), m_currentAddress);
@@ -195,34 +195,34 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 				}
 			}
 			else {
-				// »ã±àÖ¸Áî
+				// æ±‡ç¼–æŒ‡ä»¤
 				uintptr_t instructionAddress = m_currentAddress;
 				if (!ProcessAssemblyInstruction(line)) {
-					// ´¦ÀíÊ§°Ü£¬Ìí¼Óµ½ÑÓ³ÙÁĞ±í
+					// å¤„ç†å¤±è´¥ï¼Œæ·»åŠ åˆ°å»¶è¿Ÿåˆ—è¡¨
 					DelayedInstruction delayed;
 					delayed.instruction = line;
 					delayed.address = instructionAddress;
 					delayedInstructions.push_back(delayed);
 					LOG_DEBUG_F("Delaying instruction at 0x%llX: %s", instructionAddress, line.c_str());
 
-					// Ô¤¹ÀÖ¸Áî³¤¶È£¬¸üĞÂµ±Ç°µØÖ·
+					// é¢„ä¼°æŒ‡ä»¤é•¿åº¦ï¼Œæ›´æ–°å½“å‰åœ°å€
 					std::istringstream iss(line);
 					std::string op;
 					iss >> op;
 					std::transform(op.begin(), op.end(), op.begin(), ::tolower);
 
 					if (op == "jmp" || op == "call") {
-						m_currentAddress += 5; // Ô¤¹ÀE9Ìø×ª5×Ö½Ú
+						m_currentAddress += 5; // é¢„ä¼°E9è·³è½¬5å­—èŠ‚
 					}
 					else {
-						m_currentAddress += 4; // ÆäËûÖ¸ÁîÆ½¾ù4×Ö½Ú
+						m_currentAddress += 4; // å…¶ä»–æŒ‡ä»¤å¹³å‡4å­—èŠ‚
 					}
 				}
 			}
 		}
 	}
 
-	// µÚÈı±é£º´¦ÀíÑÓ³ÙµÄÖ¸Áî£¨ÏÖÔÚËùÓĞ·ûºÅ¶¼Ó¦¸ÃÒÑ¶¨Òå£©
+	// ç¬¬ä¸‰éï¼šå¤„ç†å»¶è¿Ÿçš„æŒ‡ä»¤ï¼ˆç°åœ¨æ‰€æœ‰ç¬¦å·éƒ½åº”è¯¥å·²å®šä¹‰ï¼‰
 	LOG_DEBUG("=== Pass 3: Processing delayed instructions ===");
 	for (const auto& delayed : delayedInstructions) {
 		uintptr_t savedAddress = m_currentAddress;
@@ -250,7 +250,7 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 
 	LOG_DEBUG_F("Processing instruction: %s", line.c_str());
 
-	// ´¦ÀíÌØÊâÖ¸Áî
+	// å¤„ç†ç‰¹æ®Šçš„ nop æŒ‡ä»¤ï¼ˆæ”¯æŒ nop 3 è¿™ç§è¯­æ³•ï¼‰
 	std::istringstream iss(line);
 	std::string op;
 	iss >> op;
@@ -268,117 +268,88 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		return WriteBytes(nopBytes);
 	}
 
-	// ¼ì²éÊÇ·ñÊÇÌø×ªÖ¸ÁîÇÒ°üº¬·ûºÅ
+	// ç¬¬ä¸€æ­¥ï¼šç›´æ¥å°è¯•è®© Keystone æ±‡ç¼–åŸå§‹è¡Œ
+	unsigned char* encode = nullptr;
+	size_t size = 0;
+	size_t count = 0;
+
+	LOG_TRACE_F("First attempt: assembling @0x%llX : %s", m_currentAddress, line.c_str());
+	int err = ks_asm(m_ksEngine, line.c_str(), m_currentAddress, &encode, &size, &count);
+
+	if (err == KS_ERR_OK && size > 0) {
+		// Keystone æˆåŠŸæ±‡ç¼–ï¼Œè¯´æ˜è¿™æ˜¯æœ‰æ•ˆçš„æ±‡ç¼–æŒ‡ä»¤
+		std::vector<uint8_t> machineCode(encode, encode + size);
+		ks_free(encode);
+		LOG_DEBUG_F("Direct assembly successful: %zu bytes", size);
+		return WriteBytes(machineCode);
+	}
+	else if (err == KS_ERR_OK && size == 0) {
+		// Keystone è¿”å›æˆåŠŸä½†æ²¡æœ‰ç”Ÿæˆä»£ç ï¼Œå¯èƒ½æ˜¯æ ‡ç­¾
+		LOG_DEBUG_F("Keystone returned empty result, likely a label: %s", line.c_str());
+		return true;  // æ ‡ç­¾ä¸ç”Ÿæˆä»£ç ï¼Œä½†æ˜¯æˆåŠŸçš„
+	}
+
+	// Keystone å¤±è´¥äº†ï¼Œæ£€æŸ¥é”™è¯¯ç±»å‹
+	ks_err ks_error = ks_errno(m_ksEngine);
+	LOG_DEBUG_F("Keystone failed with error: %s", ks_strerror(ks_error));
+
+	// ç¬¬äºŒæ­¥ï¼šå¦‚æœå¤±è´¥å¯èƒ½æ˜¯å› ä¸ºåŒ…å«æˆ‘ä»¬çš„ç¬¦å·ï¼Œå°è¯•æ›¿æ¢ç¬¦å·
+	std::string processedLine = ReplaceSymbols(line);
+
+	if (processedLine != line) {
+		// ç¬¦å·è¢«æ›¿æ¢äº†ï¼Œå†æ¬¡å°è¯•æ±‡ç¼–
+		LOG_DEBUG_F("After symbol replacement: %s -> %s", line.c_str(), processedLine.c_str());
+
+		err = ks_asm(m_ksEngine, processedLine.c_str(), m_currentAddress, &encode, &size, &count);
+		if (err == KS_ERR_OK && size > 0) {
+			std::vector<uint8_t> machineCode(encode, encode + size);
+			ks_free(encode);
+			LOG_DEBUG_F("Assembly after symbol replacement successful: %zu bytes", size);
+			return WriteBytes(machineCode);
+		}
+	}
+
+	// ç¬¬ä¸‰æ­¥ï¼šç‰¹æ®Šå¤„ç†è·³è½¬æŒ‡ä»¤
 	if (op == "jmp" || op == "call" || op.find("j") == 0) {
 		std::string operand;
-		iss >> operand;
+		iss.str(line);  // é‡ç½®æµ
+		iss.clear();
+		iss >> op >> operand;
 
-		// ¼ì²é²Ù×÷ÊıÊÇ·ñÊÇ·ûºÅ£¨²»ÊÇÊı×Ö»ò¼Ä´æÆ÷£©
+		// æ£€æŸ¥æ“ä½œæ•°æ˜¯å¦å¯èƒ½æ˜¯ç¬¦å·
 		if (!operand.empty() && std::isalpha(operand[0])) {
 			uintptr_t targetAddr;
 			if (m_symbolManager->GetSymbolAddress(operand, targetAddr)) {
 				if (targetAddr != 0) {
-					// ·ûºÅÒÑ½âÎö£¬×Ô¼ºÉú³ÉÌø×ªÖ¸Áî
+					// ç¬¦å·å·²è§£æï¼Œè‡ªå·±ç”Ÿæˆè·³è½¬æŒ‡ä»¤
 					LOG_DEBUG_F("Jump to resolved symbol: %s -> 0x%llX", operand.c_str(), targetAddr);
 					return ProcessJumpInstruction(op, targetAddr);
 				}
 				else {
-					// Ç°ÏòÒıÓÃ£¬ÑÓ³Ù´¦Àí
+					// å‰å‘å¼•ç”¨ï¼Œå»¶è¿Ÿå¤„ç†
 					LOG_DEBUG_F("Forward reference detected: %s %s", op.c_str(), operand.c_str());
 					return false;
 				}
 			}
-			else {
-				LOG_ERROR_F("Unknown symbol: %s", operand.c_str());
-				return false;
-			}
 		}
 	}
 
-	// Ìæ»»·ûºÅºó½»¸øKeystone
-	std::string processedLine = ReplaceSymbols(line);
-	LOG_DEBUG_F("After symbol replacement: %s -> %s", line.c_str(), processedLine.c_str());
-
-	// ¶ÔÓÚ¼òµ¥Ö¸Áî£¬²»ĞèÒª¼ì²éÎ´½âÎö·ûºÅ£¬Ö±½Ó³¢ÊÔ»ã±à
-	if (op == "mov" || op == "add" || op == "sub" || op == "push" || op == "pop" ||
-		op == "inc" || op == "dec" || op == "nop" || op == "lea" || op == "cmp" || op == "test") {
-		LOG_DEBUG_F("Simple instruction, attempting direct assembly");
-	}
-	else {
-		// ¼ì²éÌæ»»ºóÊÇ·ñ»¹ÓĞÎ´½âÎöµÄ·ûºÅ
-		if (ContainsUnresolvedSymbols(processedLine)) {
-			LOG_DEBUG_F("Instruction contains unresolved symbols, delaying: %s", processedLine.c_str());
-			return false; // ÑÓ³Ù´¦Àí
-		}
-	}
-
-	unsigned char* encode;
-	size_t size;
-	size_t count;
-
-	LOG_TRACE_F("Assembling @0x%llX : %s", m_currentAddress, processedLine.c_str());
-	if (ks_asm(m_ksEngine, processedLine.c_str(), m_currentAddress, &encode, &size, &count) == KS_ERR_OK) {
-		std::vector<uint8_t> machineCode(encode, encode + size);
-		ks_free(encode);
-		LOG_DEBUG_F("Assembly successful: %zu bytes", size);
-		return WriteBytes(machineCode);
-	}
-	else {
-		LOG_ERROR_F("Keystone error (%s) for line \"%s\"",
-			ks_strerror(ks_errno(m_ksEngine)), processedLine.c_str());
-		return false;
-	}
-}
-
-
-bool CEAssemblyEngine::ContainsUnresolvedSymbols(const std::string& line) {
-	std::regex symbolRegex(R"(\b([a-zA-Z_]\w*)\b)");
-	std::smatch match;
-	std::string temp = line;
-
-	LOG_TRACE_F("Checking unresolved symbols in: %s", line.c_str());
-
-	while (std::regex_search(temp, match, symbolRegex)) {
-		std::string symbol = match[1];
-		std::string lowerSymbol = symbol;
-		std::transform(lowerSymbol.begin(), lowerSymbol.end(), lowerSymbol.begin(), ::tolower);
-
-		LOG_TRACE_F("Found potential symbol: %s", symbol.c_str());
-
-		// ¡¾ÏÈÅĞ¼Ä´æÆ÷ºÍÖ¸Áî£¬Èç¹ûÊÇ£¬Ö±½ÓÌø¹ı¡¿
-		if (isX64RegisterName(lowerSymbol)) {
-			LOG_TRACE_F("Symbol %s is a register/instruction", symbol.c_str());
-			temp = match.suffix();
-			continue;
-		}
-
-		// ÔÙÅĞ·ûºÅ±íºÍ²¶»ñ±äÁ¿
-		uintptr_t addr;
-		uint64_t value;
-		if (!m_symbolManager->GetSymbolAddress(symbol, addr) &&
-			!m_symbolManager->GetCapturedValue(symbol, value)) {
-			LOG_DEBUG_F("Unresolved symbol found: %s", symbol.c_str());
-			return true;
-		}
-		else {
-			LOG_TRACE_F("Symbol %s is resolved (user symbol or captured value)", symbol.c_str());
-		}
-		temp = match.suffix();
-	}
+	// å¦‚æœè¿˜æ˜¯å¤±è´¥ï¼Œå¯èƒ½çœŸçš„æ˜¯é”™è¯¯
+	LOG_ERROR_F("Failed to assemble instruction: %s (Keystone error: %s)",
+		line.c_str(), ks_strerror(ks_errno(m_ksEngine)));
 	return false;
 }
-
 
 bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr) {
 	std::string op = opcode;
 	std::transform(op.begin(), op.end(), op.begin(), ::tolower);
 
 	if (op == "jmp") {
-		// ¼ÆËãÏà¶ÔÆ«ÒÆ
+		// è®¡ç®—ç›¸å¯¹åç§»
 		int64_t offset = targetAddr - (m_currentAddress + 5);
 
 		if (offset >= -0x80000000LL && offset <= 0x7FFFFFFFLL) {
-			// E9Ïà¶ÔÌø×ª
+			// E9ç›¸å¯¹è·³è½¬
 			std::vector<uint8_t> jumpBytes = {
 				0xE9,
 				static_cast<uint8_t>(offset & 0xFF),
@@ -392,13 +363,13 @@ bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr
 			return WriteBytes(jumpBytes);
 		}
 		else {
-			// ¾àÀëÌ«Ô¶£¬Ê¹ÓÃFF25¾ø¶ÔÌø×ª
-			// FF 25 00 00 00 00 [8×Ö½ÚÄ¿±êµØÖ·]
+			// è·ç¦»å¤ªè¿œï¼Œä½¿ç”¨FF25ç»å¯¹è·³è½¬
+			// FF 25 00 00 00 00 [8å­—èŠ‚ç›®æ ‡åœ°å€]
 			std::vector<uint8_t> jumpBytes = {
 				0xFF, 0x25, 0x00, 0x00, 0x00, 0x00  // FF 25 00000000 (jmp [rip+0])
 			};
 
-			// Ìí¼Ó8×Ö½ÚÄ¿±êµØÖ·
+			// æ·»åŠ 8å­—èŠ‚ç›®æ ‡åœ°å€
 			for (int i = 0; i < 8; ++i) {
 				jumpBytes.push_back((targetAddr >> (i * 8)) & 0xFF);
 			}
@@ -409,7 +380,7 @@ bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr
 		}
 	}
 	else if (op == "call") {
-		// callÖ¸Áî
+		// callæŒ‡ä»¤
 		int64_t offset = targetAddr - (m_currentAddress + 5);
 
 		if (offset >= -0x80000000LL && offset <= 0x7FFFFFFFLL) {
@@ -424,7 +395,7 @@ bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr
 			return WriteBytes(callBytes);
 		}
 		else {
-			// callµÄÔ¶³Ìµ÷ÓÃ¿ÉÒÔÊ¹ÓÃÆäËû·½·¨
+			// callçš„è¿œç¨‹è°ƒç”¨å¯ä»¥ä½¿ç”¨å…¶ä»–æ–¹æ³•
 			LOG_ERROR_F("Call distance too far: %lld", offset);
 			return false;
 		}
@@ -436,11 +407,11 @@ bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr
 bool CEAssemblyEngine::WriteBytes(const std::vector<uint8_t>& bytes) {
 	if (bytes.empty() || m_currentAddress == 0) return false;
 
-	// ±£´æÔ­Ê¼×Ö½Ú
+	// ä¿å­˜åŸå§‹å­—èŠ‚
 	std::vector<uint8_t> originalBytes(bytes.size());
 	m_memoryManager->ReadMemory(m_currentAddress, originalBytes.data(), bytes.size());
 
-	// Ğ´ÈëĞÂ×Ö½Ú
+	// å†™å…¥æ–°å­—èŠ‚
 	DWORD oldProtect;
 	if (m_memoryManager->ProtectMemory(m_currentAddress, bytes.size(),
 		PAGE_EXECUTE_READWRITE, &oldProtect)) {
@@ -448,11 +419,11 @@ bool CEAssemblyEngine::WriteBytes(const std::vector<uint8_t>& bytes) {
 		m_memoryManager->ProtectMemory(m_currentAddress, bytes.size(), oldProtect, &oldProtect);
 
 		if (success) {
-			// ¼ÇÂ¼²¹¶¡
+			// è®°å½•è¡¥ä¸
 			AddPatch(m_currentAddress, originalBytes, bytes);
 			LOG_TRACE_F("Wrote %zu bytes at 0x%llX", bytes.size(), m_currentAddress);
 
-			// ¸üĞÂµ±Ç°µØÖ·
+			// æ›´æ–°å½“å‰åœ°å€
 			m_currentAddress += bytes.size();
 			return true;
 		}
@@ -512,7 +483,7 @@ bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 		size = std::stoull(sizeStr, nullptr, 10);
 	}
 
-	// »ñÈ¡¸½½üµØÖ·
+	// è·å–é™„è¿‘åœ°å€
 	uintptr_t nearAddress = 0;
 	if (cmd.parameters.size() > 2) {
 		m_symbolManager->GetSymbolAddress(cmd.parameters[2], nearAddress);
@@ -521,11 +492,11 @@ bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 	uintptr_t allocAddr = 0;
 
 	if (nearAddress != 0) {
-		// ²ßÂÔ1: ÓÅÏÈÔÚ¸½½üµØÖ·ÉêÇë£¬¼ì²éÊÇ·ñÔÚE9·¶Î§ÄÚ
+		// ç­–ç•¥1: ä¼˜å…ˆåœ¨é™„è¿‘åœ°å€ç”³è¯·ï¼Œæ£€æŸ¥æ˜¯å¦åœ¨E9èŒƒå›´å†…
 		allocAddr = m_memoryManager->AllocateNear(nearAddress, size, allocName);
 
 		if (allocAddr != 0) {
-			// ¼ì²é¾àÀëÊÇ·ñÔÚE9·¶Î§ÄÚ (¡À2GB)
+			// æ£€æŸ¥è·ç¦»æ˜¯å¦åœ¨E9èŒƒå›´å†… (Â±2GB)
 			int64_t distance = static_cast<int64_t>(allocAddr) - static_cast<int64_t>(nearAddress);
 			if (distance >= -0x80000000LL && distance <= 0x7FFFFFFFLL) {
 				LOG_INFO_F("Memory allocated near: %s at 0x%llX (distance from 0x%llX: %lld bytes, E9 compatible)",
@@ -535,10 +506,10 @@ bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 				LOG_INFO_F("Memory allocated far: %s at 0x%llX (distance from 0x%llX: %lld bytes, needs FF25)",
 					allocName.c_str(), allocAddr, nearAddress, distance);
 
-				// ¾àÀëÌ«Ô¶£¬ÊÍ·Å²¢³¢ÊÔÉêÇëµÍÎ»µØÖ·
+				// è·ç¦»å¤ªè¿œï¼Œé‡Šæ”¾å¹¶å°è¯•ç”³è¯·ä½ä½åœ°å€
 				m_memoryManager->Deallocate(allocName);
 
-				// ²ßÂÔ2: ÉêÇëµÍÎ»µØÖ·£¬Ê¹ÓÃFF25Ìø×ª
+				// ç­–ç•¥2: ç”³è¯·ä½ä½åœ°å€ï¼Œä½¿ç”¨FF25è·³è½¬
 				allocAddr = m_memoryManager->AllocateNear(0x10000000, size, allocName);
 				if (allocAddr != 0) {
 					LOG_INFO_F("Memory allocated low: %s at 0x%llX (will use FF25 jump)",
@@ -548,7 +519,7 @@ bool CEAssemblyEngine::ProcessAlloc(const std::string& line) {
 		}
 	}
 	else {
-		// Ã»ÓĞ¸½½üµØÖ·£¬Ö±½ÓÉêÇëµÍÎ»µØÖ·
+		// æ²¡æœ‰é™„è¿‘åœ°å€ï¼Œç›´æ¥ç”³è¯·ä½ä½åœ°å€
 		allocAddr = m_memoryManager->AllocateNear(0x10000000, size, allocName);
 		LOG_INFO_F("Memory allocated: %s at 0x%llX (no near address specified)",
 			allocName.c_str(), allocAddr);
@@ -582,7 +553,7 @@ bool CEAssemblyEngine::ProcessRegisterSymbol(const std::string& line) {
 		m_lastError = "Invalid registersymbol syntax";
 		return false;
 	}
-	// ÕâÀï¿ÉÒÔÊµÏÖÈ«¾Ö·ûºÅ×¢²áÂß¼­
+	// è¿™é‡Œå¯ä»¥å®ç°å…¨å±€ç¬¦å·æ³¨å†Œé€»è¾‘
 	return true;
 }
 std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
@@ -590,15 +561,12 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 
 	LOG_TRACE_F("Symbol replacement input: %s", line.c_str());
 
-	// 1. Ìæ»» CE ¸ñÊ½µÄÊ®Áù½øÖÆ $XX -> 0xXX
 	std::regex dollarHexRegex(R"(\$([0-9A-Fa-f]+))");
 	result = std::regex_replace(result, dollarHexRegex, "0x$1");
 
-	// 2. Ìæ»» #123 ĞÎÊ½µÄÁ¢¼´ÊıÎªÊ®½øÖÆ
 	std::regex immediateRegex(R"(#(\d+))");
 	result = std::regex_replace(result, immediateRegex, "$1");
 
-	// 3. ¼ì²éÊÇ·ñÊÇÌø×ªÖ¸Áî£¬Èç¹ûÊÇÔò²»Ìæ»»²Ù×÷ÊıÖĞµÄ·ûºÅ
 	std::istringstream iss(result);
 	std::string op;
 	iss >> op;
@@ -608,14 +576,59 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		std::string operand;
 		iss >> operand;
 
-		// Èç¹û²Ù×÷ÊıÊÇ·ûºÅ£¨×ÖÄ¸¿ªÍ·£©£¬²»½øĞĞÌæ»»
 		if (!operand.empty() && std::isalpha(operand[0])) {
 			LOG_TRACE_F("Symbol replacement output: %s (jump target preserved)", result.c_str());
 			return result;
 		}
 	}
 
-	// 4. Ìæ»»ËùÓĞÆäËû·ûºÅ
+	std::regex numberRegex(R"(\b([0-9A-Fa-f]+)\b)");
+	std::smatch numberMatch;
+	std::string tempResult = result;
+	result = "";
+
+	while (std::regex_search(tempResult, numberMatch, numberRegex)) {
+		result += numberMatch.prefix();
+
+		std::string numStr = numberMatch[1];
+		std::string context = numberMatch.prefix().str();
+
+		std::string prevToken;
+		std::istringstream contextStream(context);
+		std::string token;
+		while (contextStream >> token) {
+			prevToken = token;
+		}
+		std::transform(prevToken.begin(), prevToken.end(), prevToken.begin(), ::tolower);
+
+		bool isControlFlow = false;
+		if (context.length() > 0) {
+			char lastChar = context[context.length() - 1];
+			isControlFlow = (lastChar == '+' || lastChar == '-' || lastChar == '*' || lastChar == '[');
+		}
+
+		bool isRegister = isX64RegisterName(numStr) ||
+			(numStr.length() <= 2 && prevToken == "r") ||
+			(prevToken.length() >= 1 && prevToken[0] == 'r' && std::all_of(prevToken.begin() + 1, prevToken.end(), ::isdigit));
+		bool hasHexFormat = (numStr.find("0x") == 0) || (numStr.find("0X") == 0) ||
+			(context.find("0x" + numStr) != std::string::npos) ||
+			(context.find("0X" + numStr) != std::string::npos);
+
+		bool hasHexLetters = std::any_of(numStr.begin(), numStr.end(),
+			[](char c) { return (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'); });
+
+		if (!isRegister && !isControlFlow && !hasHexFormat) {
+			result += "0x" + numStr;
+			LOG_TRACE_F("Added 0x prefix to: %s -> 0x%s", numStr.c_str(), numStr.c_str());
+		}
+		else {
+			result += numStr;
+		}
+
+		tempResult = numberMatch.suffix();
+	}
+	result += tempResult;
+
 	std::regex symbolRegex(R"(\b([a-zA-Z_]\w*)\b)");
 	std::smatch match;
 	std::string temp = result;
@@ -626,30 +639,16 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		std::string lowerSymbol = symbol;
 		std::transform(lowerSymbol.begin(), lowerSymbol.end(), lowerSymbol.begin(), ::tolower);
 
-		// Ìø¹ı¼Ä´æÆ÷ºÍÖ¸ÁîÃû
-		//static const std::set<std::string> skipSymbols = {
-		//	"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp",
-		//	"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
-		//	"r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d",
-		//	"eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
-		//	"ax", "bx", "cx", "dx", "si", "di", "sp", "bp",
-		//	"al", "bl", "cl", "dl", "ah", "bh", "ch", "dh",
-		//	"mov", "add", "sub", "push", "pop", "call", "jmp","xor",
-		//	"and", "or", "shl", "shr", "rol", "ror", "sar", "sal",
-		//};
-
 		if (isX64RegisterName(lowerSymbol)) {
 			temp = match.suffix();
 			continue;
 		}
 
-		// ¼ì²éÊÇ·ñÊÇ²¶»ñµÄ±äÁ¿
 		uint64_t capturedValue;
 		if (m_symbolManager->GetCapturedValue(symbol, capturedValue)) {
 			replacements[symbol] = std::to_string(capturedValue);
 			LOG_DEBUG_F("Symbol '%s' -> captured value %llu", symbol.c_str(), capturedValue);
 		}
-		// ¼ì²éÊÇ·ñÊÇµØÖ··ûºÅ
 		else {
 			uintptr_t symbolAddr;
 			if (m_symbolManager->GetSymbolAddress(symbol, symbolAddr) && symbolAddr != 0) {
@@ -663,7 +662,6 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		temp = match.suffix();
 	}
 
-	// Ó¦ÓÃËùÓĞÌæ»»
 	for (const auto& [symbol, replacement] : replacements) {
 		std::regex symbolPattern("\\b" + symbol + "\\b");
 		result = std::regex_replace(result, symbolPattern, replacement);
@@ -698,7 +696,7 @@ bool CEAssemblyEngine::ProcessDisableBlock(const std::vector<std::string>& lines
 }
 
 bool CEAssemblyEngine::ProcessDbCommand(const std::string& line) {
-	// ´Ó²¹¶¡ĞÅÏ¢ÖĞ»Ö¸´Ô­Ê¼×Ö½Ú
+	// ä»è¡¥ä¸ä¿¡æ¯ä¸­æ¢å¤åŸå§‹å­—èŠ‚
 	for (const auto& patch : m_patches) {
 		if (patch.address == m_currentAddress) {
 			DWORD oldProtect;
@@ -718,7 +716,7 @@ bool CEAssemblyEngine::ProcessDbCommand(const std::string& line) {
 bool CEAssemblyEngine::ProcessAssemblyBatch(const std::vector<std::string>& instructions, uintptr_t startAddress) {
 	m_currentAddress = startAddress;
 
-	// ³¢ÊÔÅúÁ¿»ã±àËùÓĞÖ¸Áî
+	// å°è¯•æ‰¹é‡æ±‡ç¼–æ‰€æœ‰æŒ‡ä»¤
 	std::string batchAssembly;
 	for (const auto& line : instructions) {
 		if (!batchAssembly.empty()) {
@@ -743,7 +741,7 @@ bool CEAssemblyEngine::ProcessAssemblyBatch(const std::vector<std::string>& inst
 		return success;
 	}
 	else {
-		// ÅúÁ¿Ê§°Ü£¬³¢ÊÔÖğÌõ´¦Àí
+		// æ‰¹é‡å¤±è´¥ï¼Œå°è¯•é€æ¡å¤„ç†
 		LOG_WARN_F("Batch assembly failed (%s), trying individual instructions",
 			ks_strerror(ks_errno(m_ksEngine)));
 
