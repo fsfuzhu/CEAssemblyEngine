@@ -242,102 +242,126 @@ bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines)
 }
 
 bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
+	// Validate current address
 	if (m_currentAddress == 0) {
 		LOG_ERROR("Cannot process instruction without current address");
+		m_lastError = "No current address set";
 		return false;
 	}
 
 	LOG_DEBUG_F("Processing instruction: %s", line.c_str());
 
-	// 处理特殊的 nop 指令（支持 nop 3 这种语法）
-	std::istringstream iss(line);
-	std::string op;
-	iss >> op;
-	std::transform(op.begin(), op.end(), op.begin(), ::tolower);
+	// Extract opcode for special handling
+	std::string opcode;
+	std::istringstream lineStream(line);
+	lineStream >> opcode;
+	std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
 
-	if (op == "nop") {
-		int count = 1;
-		if (!(iss >> count)) count = 1;
+	// Special handling for NOP instruction
+	if (opcode == "nop") {
+		int nopCount = 1;
 
-		std::vector<uint8_t> nopBytes;
-		for (int i = 0; i < count; ++i) {
-			nopBytes.push_back(0x90);
+		// Try to read count parameter
+		std::string countStr;
+		if (lineStream >> countStr) {
+			try {
+				nopCount = std::stoi(countStr);
+			}
+			catch (...) {
+				nopCount = 1;
+			}
 		}
+
+		// Generate NOP bytes
+		std::vector<uint8_t> nopBytes(nopCount, 0x90);
+		LOG_DEBUG_F("Generating %d NOP byte(s)", nopCount);
 
 		return WriteBytes(nopBytes);
 	}
 
-	// 第一步：直接尝试让 Keystone 汇编原始行
-	unsigned char* encode = nullptr;
-	size_t size = 0;
-	size_t count = 0;
-
-	LOG_TRACE_F("First attempt: assembling @0x%llX : %s", m_currentAddress, line.c_str());
-	int err = ks_asm(m_ksEngine, line.c_str(), m_currentAddress, &encode, &size, &count);
-
-	if (err == KS_ERR_OK && size > 0) {
-		// Keystone 成功汇编，说明这是有效的汇编指令
-		std::vector<uint8_t> machineCode(encode, encode + size);
-		ks_free(encode);
-		LOG_DEBUG_F("Direct assembly successful: %zu bytes", size);
-		return WriteBytes(machineCode);
-	}
-	else if (err == KS_ERR_OK && size == 0) {
-		// Keystone 返回成功但没有生成代码，可能是标签
-		LOG_DEBUG_F("Keystone returned empty result, likely a label: %s", line.c_str());
-		return true;  // 标签不生成代码，但是成功的
-	}
-
-	// Keystone 失败了，检查错误类型
-	ks_err ks_error = ks_errno(m_ksEngine);
-	LOG_DEBUG_F("Keystone failed with error: %s", ks_strerror(ks_error));
-
-	// 第二步：如果失败可能是因为包含我们的符号，尝试替换符号
+	// Always perform symbol replacement first
+	// This ensures all numbers are converted to hex format
 	std::string processedLine = ReplaceSymbols(line);
 
+	// Log transformation if changed
 	if (processedLine != line) {
-		// 符号被替换了，再次尝试汇编
-		LOG_DEBUG_F("After symbol replacement: %s -> %s", line.c_str(), processedLine.c_str());
+		LOG_DEBUG_F("Symbol replacement: %s -> %s", line.c_str(), processedLine.c_str());
+	}
 
-		err = ks_asm(m_ksEngine, processedLine.c_str(), m_currentAddress, &encode, &size, &count);
-		if (err == KS_ERR_OK && size > 0) {
-			std::vector<uint8_t> machineCode(encode, encode + size);
-			ks_free(encode);
-			LOG_DEBUG_F("Assembly after symbol replacement successful: %zu bytes", size);
-			return WriteBytes(machineCode);
+	// Prepare for assembly
+	unsigned char* machineCode = nullptr;
+	size_t codeSize = 0;
+	size_t statements = 0;
+
+	// Assemble the processed instruction
+	LOG_TRACE_F("Assembling at 0x%llX: %s", m_currentAddress, processedLine.c_str());
+
+	int asmResult = ks_asm(m_ksEngine,
+		processedLine.c_str(),
+		m_currentAddress,
+		&machineCode,
+		&codeSize,
+		&statements);
+
+	// Handle assembly result
+	if (asmResult == KS_ERR_OK) {
+		if (codeSize > 0) {
+			// Success with generated code
+			std::vector<uint8_t> bytes(machineCode, machineCode + codeSize);
+			ks_free(machineCode);
+
+			LOG_DEBUG_F("Assembly successful: %zu bytes", codeSize);
+			return WriteBytes(bytes);
+		}
+		else {
+			// Success but no code (label or directive)
+			LOG_DEBUG("No machine code generated (label/directive)");
+			return true;
 		}
 	}
 
-	// 第三步：特殊处理跳转指令
-	if (op == "jmp" || op == "call" || op.find("j") == 0) {
-		std::string operand;
-		iss.str(line);  // 重置流
-		iss.clear();
-		iss >> op >> operand;
+	// Assembly failed
+	ks_err error = ks_errno(m_ksEngine);
+	LOG_DEBUG_F("Assembly failed: %s", ks_strerror(error));
 
-		// 检查操作数是否可能是符号
-		if (!operand.empty() && std::isalpha(operand[0])) {
-			uintptr_t targetAddr;
-			if (m_symbolManager->GetSymbolAddress(operand, targetAddr)) {
+	// Check if it's a jump instruction with unresolved symbol
+	std::istringstream processedStream(processedLine);
+	std::string processedOp;
+	processedStream >> processedOp;
+	std::transform(processedOp.begin(), processedOp.end(), processedOp.begin(), ::tolower);
+
+	// Handle jump/call instructions
+	if (processedOp == "jmp" || processedOp == "call" ||
+		(processedOp.size() > 0 && processedOp[0] == 'j')) {
+
+		std::string target;
+		processedStream >> target;
+
+		// Check if target is a symbol
+		if (!target.empty() && (std::isalpha(target[0]) || target[0] == '_')) {
+			uintptr_t targetAddr = 0;
+
+			if (m_symbolManager->GetSymbolAddress(target, targetAddr)) {
 				if (targetAddr != 0) {
-					// 符号已解析，自己生成跳转指令
-					LOG_DEBUG_F("Jump to resolved symbol: %s -> 0x%llX", operand.c_str(), targetAddr);
-					return ProcessJumpInstruction(op, targetAddr);
+					// Generate jump instruction
+					LOG_DEBUG_F("Generating jump to %s (0x%llX)", target.c_str(), targetAddr);
+					return ProcessJumpInstruction(processedOp, targetAddr);
 				}
 				else {
-					// 前向引用，延迟处理
-					LOG_DEBUG_F("Forward reference detected: %s %s", op.c_str(), operand.c_str());
+					// Forward reference
+					LOG_DEBUG_F("Forward reference: %s", target.c_str());
 					return false;
 				}
 			}
 		}
 	}
 
-	// 如果还是失败，可能真的是错误
-	LOG_ERROR_F("Failed to assemble instruction: %s (Keystone error: %s)",
-		line.c_str(), ks_strerror(ks_errno(m_ksEngine)));
+	// Final error
+	LOG_ERROR_F("Failed to assemble: %s", processedLine.c_str());
+	m_lastError = std::string("Assembly error: ") + ks_strerror(error);
 	return false;
 }
+
 
 bool CEAssemblyEngine::ProcessJumpInstruction(const std::string& opcode, uintptr_t targetAddr) {
 	std::string op = opcode;
@@ -556,119 +580,208 @@ bool CEAssemblyEngine::ProcessRegisterSymbol(const std::string& line) {
 	return true;
 }
 std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
-	std::string result = line;
-
 	LOG_TRACE_F("Symbol replacement input: %s", line.c_str());
 
-	std::regex dollarHexRegex(R"(\$([0-9A-Fa-f]+))");
-	result = std::regex_replace(result, dollarHexRegex, "0x$1");
+	// Tokenizer state
+	enum TokenType {
+		TK_WHITESPACE,
+		TK_OPCODE,
+		TK_REGISTER,
+		TK_NUMBER,
+		TK_SYMBOL,
+		TK_OPERATOR,
+		TK_PUNCTUATION,
+		TK_UNKNOWN
+	};
 
-	std::regex immediateRegex(R"(#(\d+))");
-	result = std::regex_replace(result, immediateRegex, "$1");
+	struct Token {
+		TokenType type;
+		std::string text;
+	};
 
-	std::istringstream iss(result);
-	std::string op;
-	iss >> op;
-	std::transform(op.begin(), op.end(), op.begin(), ::tolower);
+	std::vector<Token> tokens;
+	size_t i = 0;
 
-	if (op == "jmp" || op == "call" || op.find("j") == 0) {
-		std::string operand;
-		iss >> operand;
+	// Tokenization phase
+	while (i < line.length()) {
+		Token token;
 
-		if (!operand.empty() && std::isalpha(operand[0])) {
-			LOG_TRACE_F("Symbol replacement output: %s (jump target preserved)", result.c_str());
-			return result;
-		}
-	}
-
-	std::regex numberRegex(R"(\b([0-9A-Fa-f]+)\b)");
-	std::smatch numberMatch;
-	std::string tempResult = result;
-	result = "";
-
-	while (std::regex_search(tempResult, numberMatch, numberRegex)) {
-		result += numberMatch.prefix();
-
-		std::string numStr = numberMatch[1];
-		std::string context = numberMatch.prefix().str();
-
-		std::string prevToken;
-		std::istringstream contextStream(context);
-		std::string token;
-		while (contextStream >> token) {
-			prevToken = token;
-		}
-		std::transform(prevToken.begin(), prevToken.end(), prevToken.begin(), ::tolower);
-
-		bool isControlFlow = false;
-		if (context.length() > 0) {
-			char lastChar = context[context.length() - 1];
-			isControlFlow = (lastChar == '+' || lastChar == '-' || lastChar == '*' || lastChar == '[');
-		}
-
-		bool isRegister = isX64RegisterName(numStr) ||
-			(numStr.length() <= 2 && prevToken == "r") ||
-			(prevToken.length() >= 1 && prevToken[0] == 'r' && std::all_of(prevToken.begin() + 1, prevToken.end(), ::isdigit));
-		bool hasHexFormat = (numStr.find("0x") == 0) || (numStr.find("0X") == 0) ||
-			(context.find("0x" + numStr) != std::string::npos) ||
-			(context.find("0X" + numStr) != std::string::npos);
-
-		bool hasHexLetters = std::any_of(numStr.begin(), numStr.end(),
-			[](char c) { return (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'); });
-
-		if (!isRegister && !isControlFlow && !hasHexFormat) {
-			result += "0x" + numStr;
-			LOG_TRACE_F("Added 0x prefix to: %s -> 0x%s", numStr.c_str(), numStr.c_str());
-		}
-		else {
-			result += numStr;
-		}
-
-		tempResult = numberMatch.suffix();
-	}
-	result += tempResult;
-
-	std::regex symbolRegex(R"(\b([a-zA-Z_]\w*)\b)");
-	std::smatch match;
-	std::string temp = result;
-	std::map<std::string, std::string> replacements;
-
-	while (std::regex_search(temp, match, symbolRegex)) {
-		std::string symbol = match[1];
-		std::string lowerSymbol = symbol;
-		std::transform(lowerSymbol.begin(), lowerSymbol.end(), lowerSymbol.begin(), ::tolower);
-
-		if (isX64RegisterName(lowerSymbol)) {
-			temp = match.suffix();
+		// Whitespace
+		if (std::isspace(line[i])) {
+			token.type = TK_WHITESPACE;
+			while (i < line.length() && std::isspace(line[i])) {
+				token.text += line[i++];
+			}
+			tokens.push_back(token);
 			continue;
 		}
 
-		uint64_t capturedValue;
-		if (m_symbolManager->GetCapturedValue(symbol, capturedValue)) {
-			replacements[symbol] = std::to_string(capturedValue);
-			LOG_DEBUG_F("Symbol '%s' -> captured value %llu", symbol.c_str(), capturedValue);
-		}
-		else {
-			uintptr_t symbolAddr;
-			if (m_symbolManager->GetSymbolAddress(symbol, symbolAddr) && symbolAddr != 0) {
-				std::stringstream ss;
-				ss << "0x" << std::hex << symbolAddr;
-				replacements[symbol] = ss.str();
-				LOG_DEBUG_F("Symbol '%s' -> address 0x%llX", symbol.c_str(), symbolAddr);
-			}
+		// Punctuation
+		if (line[i] == ',' || line[i] == '[' || line[i] == ']' ||
+			line[i] == '(' || line[i] == ')' || line[i] == ':') {
+			token.type = TK_PUNCTUATION;
+			token.text = line[i++];
+			tokens.push_back(token);
+			continue;
 		}
 
-		temp = match.suffix();
+		// Operators
+		if (line[i] == '+' || line[i] == '-' || line[i] == '*') {
+			token.type = TK_OPERATOR;
+			token.text = line[i++];
+			tokens.push_back(token);
+			continue;
+		}
+
+		// $ prefix (CE hex notation)
+		if (line[i] == '$') {
+			i++; // Skip $
+			token.type = TK_NUMBER;
+			std::string hexNum;
+			while (i < line.length() && std::isxdigit(line[i])) {
+				hexNum += line[i++];
+			}
+			token.text = "0x" + hexNum;
+			tokens.push_back(token);
+			LOG_TRACE_F("CE hex: $%s -> %s", hexNum.c_str(), token.text.c_str());
+			continue;
+		}
+
+		// # prefix (immediate value)
+		if (line[i] == '#') {
+			i++; // Skip #
+			token.type = TK_NUMBER;
+			std::string num;
+			while (i < line.length() && std::isdigit(line[i])) {
+				num += line[i++];
+			}
+			// Keep as decimal
+			token.text = num;
+			tokens.push_back(token);
+			LOG_TRACE_F("Immediate: #%s -> %s", num.c_str(), token.text.c_str());
+			continue;
+		}
+
+		// 0x prefix
+		if (i + 2 <= line.length() && line[i] == '0' &&
+			(line[i + 1] == 'x' || line[i + 1] == 'X')) {
+			token.type = TK_NUMBER;
+			token.text = "0x";
+			i += 2;
+			while (i < line.length() && std::isxdigit(line[i])) {
+				token.text += line[i++];
+			}
+			tokens.push_back(token);
+			continue;
+		}
+
+		// Alphanumeric sequence
+		if (std::isalnum(line[i]) || line[i] == '_') {
+			std::string word;
+			size_t start = i;
+
+			while (i < line.length() && (std::isalnum(line[i]) || line[i] == '_')) {
+				word += line[i++];
+			}
+
+			// Determine type
+			std::string lowerWord = word;
+			std::transform(lowerWord.begin(), lowerWord.end(), lowerWord.begin(), ::tolower);
+
+			// First token is usually opcode
+			if (tokens.empty() || (tokens.size() > 0 &&
+				tokens.back().type == TK_PUNCTUATION && tokens.back().text == ":")) {
+				token.type = TK_OPCODE;
+			}
+			// Check if register
+			else if (isX64RegisterName(lowerWord)) {
+				token.type = TK_REGISTER;
+			}
+			// Check if pure number
+			else if (std::all_of(word.begin(), word.end(),
+				[](char c) { return std::isxdigit(c); })) {
+				token.type = TK_NUMBER;
+				// Add 0x prefix to all numbers
+				token.text = "0x" + word;
+				LOG_TRACE_F("Auto-hex: %s -> %s", word.c_str(), token.text.c_str());
+				tokens.push_back(token);
+				continue;
+			}
+			// Otherwise it's a symbol
+			else {
+				token.type = TK_SYMBOL;
+			}
+
+			token.text = word;
+			tokens.push_back(token);
+			continue;
+		}
+
+		// Unknown character
+		token.type = TK_UNKNOWN;
+		token.text = line[i++];
+		tokens.push_back(token);
 	}
 
-	for (const auto& [symbol, replacement] : replacements) {
-		std::regex symbolPattern("\\b" + symbol + "\\b");
-		result = std::regex_replace(result, symbolPattern, replacement);
+	// Build result
+	std::string result;
+
+	for (size_t idx = 0; idx < tokens.size(); idx++) {
+		const Token& tok = tokens[idx];
+
+		if (tok.type == TK_SYMBOL) {
+			// Check if it's a jump target
+			bool isJumpTarget = false;
+
+			// Look backward for opcode
+			for (int j = idx - 1; j >= 0; j--) {
+				if (tokens[j].type == TK_OPCODE) {
+					std::string op = tokens[j].text;
+					std::transform(op.begin(), op.end(), op.begin(), ::tolower);
+					if (op == "jmp" || op == "call" ||
+						(op.length() > 0 && op[0] == 'j')) {
+						isJumpTarget = true;
+					}
+					break;
+				}
+				else if (tokens[j].type != TK_WHITESPACE) {
+					break;
+				}
+			}
+
+			if (!isJumpTarget) {
+				// Try to resolve symbol
+				uint64_t capturedVal;
+				uintptr_t symbolAddr;
+
+				if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
+					result += std::to_string(capturedVal);
+					LOG_DEBUG_F("Symbol %s -> captured %llu", tok.text.c_str(), capturedVal);
+				}
+				else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr) &&
+					symbolAddr != 0) {
+					std::stringstream ss;
+					ss << "0x" << std::hex << symbolAddr;
+					result += ss.str();
+					LOG_DEBUG_F("Symbol %s -> 0x%llX", tok.text.c_str(), symbolAddr);
+				}
+				else {
+					result += tok.text;
+				}
+			}
+			else {
+				result += tok.text;
+			}
+		}
+		else {
+			result += tok.text;
+		}
 	}
 
 	LOG_TRACE_F("Symbol replacement output: %s", result.c_str());
 	return result;
 }
+
 bool CEAssemblyEngine::ProcessDisableBlock(const std::vector<std::string>& lines) {
 	for (const auto& line : lines) {
 		ParsedCommand cmd = m_parser->ParseLine(line);
