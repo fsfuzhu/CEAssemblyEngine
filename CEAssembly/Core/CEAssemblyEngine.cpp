@@ -5,7 +5,6 @@
 #include "Scanner/PatternScanner.h"
 #include "MemoryManager.h"
 #include "Parser/CEScriptParser.h"
-#include "asmjit/x86.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
