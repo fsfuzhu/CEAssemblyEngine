@@ -23,6 +23,7 @@
     <ClInclude Include="CEAssembly\Core\CEAssemblyEngine.h" />
     <ClInclude Include="CEAssembly\Core\CEScript.h" />
     <ClInclude Include="CEAssembly\Core\MemoryManager.h" />
+    <ClInclude Include="CEAssembly\Core\PassManager.h" />
     <ClInclude Include="CEAssembly\Parser\CEScriptParser.h" />
     <ClInclude Include="CEAssembly\Scanner\PatternScanner.h" />
     <ClInclude Include="CEAssembly\Symbol\SymbolManager.h" />
@@ -49,6 +50,7 @@
     <ClCompile Include="CEAssembly\Core\CEAssemblyEngine.cpp" />
     <ClCompile Include="CEAssembly\Core\CEScript.cpp" />
     <ClCompile Include="CEAssembly\Core\MemoryManager.cpp" />
+    <ClCompile Include="CEAssembly\Core\PassManager.cpp" />
     <ClCompile Include="CEAssembly\Parser\CEScriptParser.cpp" />
     <ClCompile Include="CEAssembly\Scanner\PatternScanner.cpp" />
     <ClCompile Include="CEAssembly\Symbol\SymbolManager.cpp" />

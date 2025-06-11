@@ -1,4 +1,5 @@
 ﻿#include "CEAssemblyEngine.h"
+#include "PassManager.h" 
 #include "Utils/DebugHelper.h"
 #include "CEScript.h"
 #include "Symbol/SymbolManager.h"
@@ -12,12 +13,208 @@
 #include <set>
 #include <map>
 #include <cctype>
+#include <unordered_set>
+
+
+// 更完善的寄存器判断函数（放在 CEAssemblyEngine.cpp 中）
 
 bool isX64RegisterName(const std::string& token) {
+	// 转换为小写进行比较
+	std::string lower = token;
+	std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+	// 使用正则表达式进行更精确的匹配
 	static const std::regex regPattern(
-		R"(^(r(1[0-5]|[8-9]|[abcd]x|sp|bp|si|di)|e[a-d]x|e(si|di|bp|sp)|[abcd][hl]|[rs]i|[rs]p|rip|xmm\d+|ymm\d+|st\d+)$)",
-		std::regex::icase);
-	return std::regex_match(token, regPattern);
+		R"(^()"
+		// 64位通用寄存器
+		R"(r(ax|bx|cx|dx|si|di|bp|sp|8|9|1[0-5])|)"
+		// 32位通用寄存器
+		R"(e(ax|bx|cx|dx|si|di|bp|sp)|r(8|9|1[0-5])d|)"
+		// 16位通用寄存器
+		R"((ax|bx|cx|dx|si|di|bp|sp)|r(8|9|1[0-5])w|)"
+		// 8位通用寄存器
+		R"([abcd][hl]|(si|di|bp|sp)l|r(8|9|1[0-5])b|)"
+		// 段寄存器
+		R"([cdefgs]s|)"
+		// 控制和调试寄存器
+		R"(cr[0234]|cr8|dr[0-7]|)"
+		// MMX寄存器
+		R"(mm[0-7]|)"
+		// XMM寄存器 (SSE)
+		R"(xmm(1[0-5]|[0-9])|)"
+		// YMM寄存器 (AVX)
+		R"(ymm(1[0-5]|[0-9])|)"
+		// ZMM寄存器 (AVX-512)
+		R"(zmm(3[01]|[12][0-9]|[0-9])|)"
+		// FPU寄存器
+		R"(st[0-7]?|)"
+		// 特殊寄存器
+		R"(rip|eip|ip|rflags|eflags|flags)"
+		R"()$)",
+		std::regex::icase | std::regex::optimize
+	);
+
+	return std::regex_match(lower, regPattern);
+}
+
+// 更完善的指令助记符判断
+bool isX64Mnemonic(const std::string& token) {
+	static const std::unordered_set<std::string> mnemonics = {
+		// 数据传输指令
+		"mov", "movabs", "movsx", "movsxd", "movzx", "lea", "xchg",
+		"push", "pop", "pushf", "popf", "pushfd", "popfd", "pushfq", "popfq",
+		"pusha", "popa", "pushad", "popad",
+		"xlatb", "bswap", "cmpxchg", "cmpxchg8b", "cmpxchg16b",
+
+		// 算术指令
+		"add", "adc", "sub", "sbb", "imul", "mul", "idiv", "div",
+		"inc", "dec", "neg", "cmp", "daa", "das", "aaa", "aas", "aam", "aad",
+
+		// 逻辑指令
+		"and", "or", "xor", "not", "test",
+
+		// 移位和旋转指令
+		"sal", "sar", "shl", "shr", "shld", "shrd",
+		"rol", "ror", "rcl", "rcr",
+
+		// 位操作指令
+		"bt", "btc", "btr", "bts", "bsf", "bsr", "popcnt", "lzcnt", "tzcnt",
+
+		// 控制转移指令
+		"jmp", "jmpf", "ljmp",
+		"ja", "jae", "jb", "jbe", "jc", "je", "jg", "jge", "jl", "jle",
+		"jna", "jnae", "jnb", "jnbe", "jnc", "jne", "jng", "jnge", "jnl", "jnle",
+		"jno", "jnp", "jns", "jnz", "jo", "jp", "jpe", "jpo", "js", "jz",
+		"jcxz", "jecxz", "jrcxz",
+		"loop", "loope", "loopz", "loopne", "loopnz",
+		"call", "ret", "retn", "retf", "iret", "iretd", "iretq",
+		"int", "int3", "into", "bound",
+		"enter", "leave",
+
+		// 字符串指令
+		"movs", "movsb", "movsw", "movsd", "movsq",
+		"cmps", "cmpsb", "cmpsw", "cmpsd", "cmpsq",
+		"scas", "scasb", "scasw", "scasd", "scasq",
+		"lods", "lodsb", "lodsw", "lodsd", "lodsq",
+		"stos", "stosb", "stosw", "stosd", "stosq",
+		"rep", "repe", "repz", "repne", "repnz",
+
+		// 标志控制指令
+		"stc", "clc", "cmc", "std", "cld", "sti", "cli",
+		"lahf", "sahf", "pushf", "popf",
+
+		// 杂项指令
+		"nop", "ud2", "cpuid", "rdtsc", "rdtscp", "rdpmc",
+		"wbinvd", "invd", "invlpg", "invpcid",
+		"hlt", "wait", "fwait", "pause", "mfence", "sfence", "lfence",
+		"prefetch", "prefetchw", "prefetcht0", "prefetcht1", "prefetcht2", "prefetchnta",
+		"clflush", "clflushopt", "clwb",
+
+		// x87 FPU 指令
+		"fld", "fst", "fstp", "fild", "fist", "fistp", "fbld", "fbstp",
+		"fxch", "fcmove", "fcmovne", "fcmovb", "fcmovbe", "fcmovnb", "fcmovnbe", "fcmovu", "fcmovnu",
+		"fadd", "faddp", "fiadd", "fsub", "fsubp", "fisub", "fsubr", "fsubrp", "fisubr",
+		"fmul", "fmulp", "fimul", "fdiv", "fdivp", "fidiv", "fdivr", "fdivrp", "fidivr",
+		"fprem", "fprem1", "fabs", "fchs", "frndint", "fscale", "fsqrt", "fxtract",
+		"fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp", "ficom", "ficomp", "fcomi", "fucomi", "fcomip", "fucomip",
+		"fsin", "fcos", "fsincos", "fptan", "fpatan", "f2xm1", "fyl2x", "fyl2xp1",
+		"finit", "fninit", "fclex", "fnclex", "fstcw", "fnstcw", "fldcw", "fstenv", "fnstenv", "fldenv", "fsave", "fnsave", "frstor",
+		"ffree", "fdecstp", "fincstp", "fstsw", "fnstsw", "fxsave", "fxrstor",
+
+		// MMX 指令
+		"emms", "movd", "movq",
+		"packsswb", "packssdw", "packuswb", "punpckhbw", "punpckhwd", "punpckhdq", "punpcklbw", "punpcklwd", "punpckldq",
+		"paddb", "paddw", "paddd", "paddsb", "paddsw", "paddusb", "paddusw",
+		"psubb", "psubw", "psubd", "psubsb", "psubsw", "psubusb", "psubusw",
+		"pmulhw", "pmullw", "pmaddwd",
+		"pcmpeqb", "pcmpeqw", "pcmpeqd", "pcmpgtb", "pcmpgtw", "pcmpgtd",
+		"pand", "pandn", "por", "pxor",
+		"psllw", "pslld", "psllq", "psrlw", "psrld", "psrlq", "psraw", "psrad",
+
+		// SSE/SSE2/SSE3/SSSE3/SSE4 指令
+		"movaps", "movups", "movapd", "movupd", "movdqa", "movdqu", "movss", "movsd", "movlps", "movhps", "movlpd", "movhpd",
+		"movmskps", "movmskpd", "movntps", "movntpd", "movnti", "movntdq",
+		"addps", "addpd", "addss", "addsd", "subps", "subpd", "subss", "subsd",
+		"mulps", "mulpd", "mulss", "mulsd", "divps", "divpd", "divss", "divsd",
+		"sqrtps", "sqrtpd", "sqrtss", "sqrtsd", "rsqrtps", "rsqrtss", "rcpps", "rcpss",
+		"maxps", "maxpd", "maxss", "maxsd", "minps", "minpd", "minss", "minsd",
+		"cmpps", "cmppd", "cmpss", "cmpsd", "comiss", "comisd", "ucomiss", "ucomisd",
+		"andps", "andpd", "andnps", "andnpd", "orps", "orpd", "xorps", "xorpd",
+		"shufps", "shufpd", "unpckhps", "unpckhpd", "unpcklps", "unpcklpd",
+		"cvtps2pd", "cvtpd2ps", "cvtps2dq", "cvtdq2ps", "cvttps2dq", "cvtpd2dq", "cvttpd2dq", "cvtdq2pd",
+		"cvtps2pi", "cvtpd2pi", "cvttps2pi", "cvttpd2pi", "cvtpi2ps", "cvtpi2pd",
+		"cvtss2si", "cvtsd2si", "cvttss2si", "cvttsd2si", "cvtsi2ss", "cvtsi2sd",
+		"maskmovq", "maskmovdqu", "pmovmskb", "pextrw", "pinsrw",
+		"pshufw", "pshufd", "pshufhw", "pshuflw",
+		"ldmxcsr", "stmxcsr",
+
+		// AVX/AVX2 指令 (v前缀版本)
+		"vaddps", "vaddpd", "vaddss", "vaddsd", "vsubps", "vsubpd", "vsubss", "vsubsd",
+		"vmulps", "vmulpd", "vmulss", "vmulsd", "vdivps", "vdivpd", "vdivss", "vdivsd",
+		"vsqrtps", "vsqrtpd", "vsqrtss", "vsqrtsd",
+		"vmovaps", "vmovups", "vmovapd", "vmovupd", "vmovss", "vmovsd", "vmovdqa", "vmovdqu",
+		"vxorps", "vxorpd", "vandps", "vandpd", "vorps", "vorpd",
+		"vcmpps", "vcmppd", "vcmpss", "vcmpsd",
+		"vshufps", "vshufpd", "vperm2f128", "vbroadcastss", "vbroadcastsd",
+
+		// 系统指令
+		"lgdt", "sgdt", "lidt", "sidt", "lldt", "sldt", "ltr", "str",
+		"lmsw", "smsw", "clts", "arpl", "lar", "lsl", "verr", "verw",
+		"invlpg", "invpcid", "wbinvd", "invd",
+		"mov", // mov to/from control/debug registers
+		"lfs", "lgs", "lss",
+		"syscall", "sysret", "sysenter", "sysexit",
+		"rdmsr", "wrmsr", "rdpmc", "rdtsc", "rdtscp",
+		"xsave", "xsavec", "xsaveopt", "xsaves", "xrstor", "xrstors",
+		"xgetbv", "xsetbv",
+
+		// 虚拟化指令
+		"vmcall", "vmlaunch", "vmresume", "vmxoff", "vmxon",
+		"invept", "invvpid", "vmfunc",
+		"vmclear", "vmptrld", "vmptrst", "vmread", "vmwrite",
+
+		// 其他扩展指令
+		"crc32", "popcnt", "lzcnt", "tzcnt", "bextr", "blsi", "blsmsk", "blsr",
+		"bzhi", "mulx", "pdep", "pext", "rorx", "sarx", "shlx", "shrx",
+		"adcx", "adox", "clac", "stac",
+		"xabort", "xacquire", "xbegin", "xend", "xrelease", "xtest",
+
+		// 加密指令
+		"aesenc", "aesenclast", "aesdec", "aesdeclast", "aesimc", "aeskeygenassist",
+		"pclmulqdq", "sha1msg1", "sha1msg2", "sha1nexte", "sha1rnds4",
+		"sha256msg1", "sha256msg2", "sha256rnds2"
+	};
+
+	std::string lower = token;
+	std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+	return mnemonics.find(lower) != mnemonics.end();
+}
+
+// 判断是否是有效的大小指示符
+bool isSizeSpecifier(const std::string& token) {
+	static const std::unordered_set<std::string> sizeSpecs = {
+		"byte", "word", "dword", "qword", "tbyte", "oword", "xmmword", "ymmword", "zmmword",
+		"ptr", "near", "far", "short"
+	};
+
+	std::string lower = token;
+	std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+	return sizeSpecs.find(lower) != sizeSpecs.end();
+}
+
+// 判断是否是数据定义指令
+bool isDataDirective(const std::string& token) {
+	static const std::unordered_set<std::string> dataDirectives = {
+		"db", "dw", "dd", "dq", "dt", "do", "dy", "dz",
+		"byte", "word", "dword", "qword", "tbyte", "real4", "real8", "real10"
+	};
+
+	std::string lower = token;
+	std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+	return dataDirectives.find(lower) != dataDirectives.end();
 }
 
 CEAssemblyEngine::CEAssemblyEngine()
@@ -25,6 +222,7 @@ CEAssemblyEngine::CEAssemblyEngine()
 	, m_patternScanner(std::make_unique<PatternScanner>())
 	, m_symbolManager(std::make_unique<SymbolManager>())
 	, m_parser(std::make_unique<CEScriptParser>())
+	, m_passManager(std::make_unique<PassManager>())  // 初始化 PassManager
 	, m_ksEngine(nullptr)
 	, m_currentAddress(0)
 	, m_currentScript(nullptr) {
@@ -121,141 +319,22 @@ void CEAssemblyEngine::AddPatch(uintptr_t address,
 }
 
 bool CEAssemblyEngine::ProcessEnableBlock(const std::vector<std::string>& lines) {
+	LOG_INFO("Processing ENABLE block with PassManager");
+
+	// 清理之前的状态
 	m_patches.clear();
 	m_currentAddress = 0;
 	m_anonymousLabels.clear();
 	m_allLabels.clear();
 
-	// Pass 1: 处理命令
-	LOG_DEBUG("=== Pass 1: Processing commands ===");
-	for (const auto& line : lines) {
-		ParsedCommand cmd = m_parser->ParseLine(line);
-
-		switch (cmd.type) {
-		case CommandType::AOBSCANMODULE:
-			if (!ProcessAobScanModule(line)) {
-				return false;
-			}
-			break;
-
-		case CommandType::ALLOC:
-			if (!ProcessAlloc(line)) {
-				return false;
-			}
-			break;
-
-		case CommandType::LABEL:
-			if (!ProcessLabel(line)) {
-				return false;
-			}
-			break;
-
-		case CommandType::REGISTERSYMBOL:
-			if (!ProcessRegisterSymbol(line)) {
-				return false;
-			}
-			break;
-
-		default:
-			break;
-		}
+	// 使用 PassManager 执行多遍处理
+	if (!m_passManager->RunAllPasses(lines, this)) {
+		m_lastError = m_passManager->GetLastError();
+		LOG_ERROR_F("PassManager failed: %s", m_lastError.c_str());
+		return false;
 	}
 
-	// Pass 2: 处理汇编指令和标签定义，收集延迟指令
-	LOG_DEBUG("=== Pass 2: Processing assembly and labels ===");
-	std::vector<DelayedInstruction> delayedInstructions;
-
-	for (const auto& line : lines) {
-		ParsedCommand cmd = m_parser->ParseLine(line);
-
-		if (cmd.type == CommandType::ASSEMBLY) {
-			if (!line.empty() && line.back() == ':') {
-				// 标签定义
-				std::string labelName = line.substr(0, line.length() - 1);
-
-				if (labelName == "@@") {
-					m_anonymousLabels.push_back(m_currentAddress);
-					m_allLabels[m_currentAddress] = "@@";
-					LOG_DEBUG_F("Anonymous label @@ at 0x%llX", m_currentAddress);
-				}
-				else {
-					// 处理 label+offset 语法
-					size_t plusPos = labelName.find('+');
-					if (plusPos != std::string::npos) {
-						std::string baseName = labelName.substr(0, plusPos);
-						std::string offsetStr = labelName.substr(plusPos + 1);
-
-						uintptr_t baseAddr = 0;
-						if (m_symbolManager->GetSymbolAddress(baseName, baseAddr) && baseAddr != 0) {
-							size_t offset = std::stoull(offsetStr, nullptr, 16);
-							m_currentAddress = baseAddr + offset;
-							LOG_DEBUG_F("Label %s: base=%s(0x%llX) + offset=0x%zX = 0x%llX",
-								labelName.c_str(), baseName.c_str(), baseAddr, offset, m_currentAddress);
-						}
-					}
-					else {
-						// 常规标签处理
-						uintptr_t existingAddr = 0;
-						if (m_symbolManager->GetSymbolAddress(labelName, existingAddr) && existingAddr != 0) {
-							// 标签已经有地址（如alloc分配的），使用该地址
-							m_currentAddress = existingAddr;
-							LOG_DEBUG_F("Label %s: using existing address 0x%llX", labelName.c_str(), existingAddr);
-						}
-						else {
-							// 新标签，更新为当前地址
-							if (m_currentAddress == 0) {
-								LOG_ERROR_F("Label %s has no valid address context", labelName.c_str());
-								m_lastError = "Label has no valid address context: " + labelName;
-								return false;
-							}
-							m_symbolManager->RegisterSymbol(labelName, m_currentAddress, 0, true);
-							LOG_DEBUG_F("Label %s: registered at 0x%llX", labelName.c_str(), m_currentAddress);
-						}
-
-						m_allLabels[m_currentAddress] = labelName;
-					}
-				}
-			}
-			else {
-				// 汇编指令
-				uintptr_t instructionAddress = m_currentAddress;
-
-				// 先估算指令大小，即使符号未解析
-				size_t estimatedSize = EstimateInstructionSize(line);
-
-				if (!ProcessAssemblyInstruction(line)) {
-					// 处理失败，添加到延迟列表
-					DelayedInstruction delayed;
-					delayed.instruction = line;
-					delayed.address = instructionAddress;
-					delayedInstructions.push_back(delayed);
-					LOG_DEBUG_F("Delaying instruction at 0x%llX: %s (estimated size: %zu)",
-						instructionAddress, line.c_str(), estimatedSize);
-
-					// 即使处理失败，也要更新地址以保持准确性
-					if (estimatedSize > 0) {
-						m_currentAddress = instructionAddress + estimatedSize;
-					}
-				}
-				// 如果成功，ProcessAssemblyInstruction 会自动更新 m_currentAddress
-			}
-		}
-	}
-
-	// Pass 3: 处理延迟指令
-	LOG_DEBUG("=== Pass 3: Processing delayed instructions ===");
-	for (const auto& delayed : delayedInstructions) {
-		m_currentAddress = delayed.address;
-
-		if (!ProcessAssemblyInstruction(delayed.instruction)) {
-			LOG_ERROR_F("Failed to process delayed instruction at 0x%llX: %s",
-				delayed.address, delayed.instruction.c_str());
-			m_lastError = "Failed to process delayed instruction: " + delayed.instruction;
-			return false;
-		}
-	}
-
-	LOG_DEBUG("=== Enable block processing completed ===");
+	LOG_INFO("ENABLE block processed successfully");
 	return true;
 }
 
@@ -512,7 +591,7 @@ std::string CEAssemblyEngine::ReplaceSymbolsForEstimation(const std::string& lin
 		tokens.push_back(token);
 	}
 
-	// Build result, using placeholder addresses for unknown symbols
+	// 构建结果
 	std::string result;
 	for (size_t idx = 0; idx < tokens.size(); idx++) {
 		const Token& tok = tokens[idx];
@@ -522,29 +601,34 @@ std::string CEAssemblyEngine::ReplaceSymbolsForEstimation(const std::string& lin
 			uint64_t capturedVal;
 			uintptr_t symbolAddr;
 
+			LOG_DEBUG_F("Trying to resolve symbol: %s", tok.text.c_str());
+
 			if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
 				result += std::to_string(capturedVal);
+				LOG_DEBUG_F("Symbol %s -> captured %llu", tok.text.c_str(), capturedVal);
 			}
-			else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr) &&
-				symbolAddr != 0) {
-				std::stringstream ss;
-				ss << "0x" << std::hex << symbolAddr;
-				result += ss.str();
-			}
-			else {
-				// Unknown symbol, use placeholder address
-				// Use a reasonable address based on current address
-				if (m_currentAddress != 0) {
+			else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr)) {
+				if (symbolAddr != 0) {
 					std::stringstream ss;
-					ss << "0x" << std::hex << m_currentAddress;
+					ss << "0x" << std::hex << symbolAddr;
 					result += ss.str();
+					LOG_DEBUG_F("Symbol %s -> 0x%llX", tok.text.c_str(), symbolAddr);
 				}
 				else {
-					result += "0x400000";  // Default base address
+					// Symbol found but address is 0
+					result += tok.text;
+					LOG_WARN_F("Symbol %s found but address is 0", tok.text.c_str());
 				}
+			}
+			else {
+				// Symbol not found, keep original
+				result += tok.text;
+				LOG_WARN_F("Symbol %s not found in symbol table", tok.text.c_str());
 			}
 		}
 		else {
+			// *** 新添加的else分支 ***
+			// 处理所有非符号类型的token（寄存器、操作符、标点符号等）
 			result += tok.text;
 		}
 	}
@@ -1124,6 +1208,18 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
+		if (line[i] == '#') {
+			i++; // 跳过 #
+			token.type = TK_NUMBER;
+			std::string decNum;
+			while (i < line.length() && std::isdigit(line[i])) {
+				decNum += line[i++];
+			}
+			token.text = decNum; // 直接使用十进制数，不加0x前缀
+			tokens.push_back(token);
+			continue;
+		}
+
 		// $ 前缀 (CE十六进制记法)
 		if (line[i] == '$') {
 			i++; // 跳过 $
@@ -1170,30 +1266,10 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			else if (isX64RegisterName(lowerWord)) {
 				token.type = TK_REGISTER;
 			}
-			// 检查是否为纯十进制数字（重要修复：不要给十进制数加0x前缀）
 			else if (std::all_of(word.begin(), word.end(), ::isdigit)) {
-				// 检查上下文 - 如果前一个token是逗号，这可能是立即数
-				bool isImmediate = false;
-				for (int j = tokens.size() - 1; j >= 0; j--) {
-					if (tokens[j].type == TK_PUNCTUATION && tokens[j].text == ",") {
-						isImmediate = true;
-						break;
-					}
-					if (tokens[j].type != TK_WHITESPACE) {
-						break;
-					}
-				}
-
-				if (isImmediate) {
-					// 是立即数，保持为十进制
-					token.type = TK_NUMBER;
-					token.text = word; // 不加0x前缀！
-				}
-				else {
-					// 可能是符号（如标签）
-					token.type = TK_SYMBOL;
-					token.text = word;
-				}
+				// 在CE中，纯数字默认是十六进制
+				token.type = TK_NUMBER;
+				token.text = "0x" + word; // CE风格：默认十六进制
 				tokens.push_back(token);
 				continue;
 			}
@@ -1225,33 +1301,43 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		tokens.push_back(token);
 	}
 
-	// 构建结果
+	// 构建结果 - 这里是需要修复的部分
 	std::string result;
 	for (size_t idx = 0; idx < tokens.size(); idx++) {
 		const Token& tok = tokens[idx];
 
 		if (tok.type == TK_SYMBOL) {
-			// 尝试解析符号
+			// Try to resolve symbol
 			uint64_t capturedVal;
 			uintptr_t symbolAddr;
+
+			LOG_DEBUG_F("Trying to resolve symbol: %s", tok.text.c_str());
 
 			if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
 				result += std::to_string(capturedVal);
 				LOG_DEBUG_F("Symbol %s -> captured %llu", tok.text.c_str(), capturedVal);
 			}
-			else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr) &&
-				symbolAddr != 0) {
-				std::stringstream ss;
-				ss << "0x" << std::hex << symbolAddr;
-				result += ss.str();
-				LOG_DEBUG_F("Symbol %s -> 0x%llX", tok.text.c_str(), symbolAddr);
+			else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr)) {
+				if (symbolAddr != 0) {
+					std::stringstream ss;
+					ss << "0x" << std::hex << symbolAddr;
+					result += ss.str();
+					LOG_DEBUG_F("Symbol %s -> 0x%llX", tok.text.c_str(), symbolAddr);
+				}
+				else {
+					// Symbol found but address is 0
+					result += tok.text;
+					LOG_WARN_F("Symbol %s found but address is 0", tok.text.c_str());
+				}
 			}
 			else {
-				// 符号未找到，保持原样
+				// Symbol not found, keep original
 				result += tok.text;
+				LOG_WARN_F("Symbol %s not found in symbol table", tok.text.c_str());
 			}
 		}
 		else {
+			// 重要修复：添加这个else分支来处理非符号的token
 			result += tok.text;
 		}
 	}
@@ -1565,7 +1651,6 @@ void CEAssemblyEngine::CleanupScript(CEScript* script) {
 	// 清理所有分配的内存
 	m_memoryManager->ClearAllAllocations();
 }
-// Helper function for data directives
 bool CEAssemblyEngine::ProcessDataDirective(const std::string& line) {
 	std::istringstream iss(line);
 	std::string directive;
@@ -1661,8 +1746,101 @@ bool CEAssemblyEngine::ProcessDataDirective(const std::string& line) {
 
 	return false;
 }
+bool CEAssemblyEngine::ProcessDataDirective(const std::string& line, std::vector<uint8_t>& dataBytes) {
+	std::istringstream iss(line);
+	std::string directive;
+	iss >> directive;
+	std::transform(directive.begin(), directive.end(), directive.begin(), ::tolower);
 
-// Helper function for CE special jumps
+	dataBytes.clear();
+
+	if (directive == "db") {
+		// Define byte
+		std::string value;
+		while (iss >> value) {
+			if (value == ",") continue;
+
+			// Process the value through symbol replacement
+			std::string processedValue = ReplaceSymbols(value);
+
+			try {
+				unsigned long val = std::stoul(processedValue, nullptr, 0);
+				dataBytes.push_back(static_cast<uint8_t>(val & 0xFF));
+			}
+			catch (...) {
+				LOG_ERROR_F("Invalid byte value: %s", value.c_str());
+				return false;
+			}
+		}
+	}
+	else if (directive == "dw") {
+		// Define word (2 bytes)
+		std::string value;
+		while (iss >> value) {
+			if (value == ",") continue;
+
+			std::string processedValue = ReplaceSymbols(value);
+
+			try {
+				unsigned long val = std::stoul(processedValue, nullptr, 0);
+				dataBytes.push_back(static_cast<uint8_t>(val & 0xFF));
+				dataBytes.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
+			}
+			catch (...) {
+				LOG_ERROR_F("Invalid word value: %s", value.c_str());
+				return false;
+			}
+		}
+	}
+	else if (directive == "dd") {
+		// Define dword (4 bytes)
+		std::string value;
+		while (iss >> value) {
+			if (value == ",") continue;
+
+			std::string processedValue = ReplaceSymbols(value);
+
+			try {
+				unsigned long val = std::stoul(processedValue, nullptr, 0);
+				dataBytes.push_back(static_cast<uint8_t>(val & 0xFF));
+				dataBytes.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
+				dataBytes.push_back(static_cast<uint8_t>((val >> 16) & 0xFF));
+				dataBytes.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
+			}
+			catch (...) {
+				LOG_ERROR_F("Invalid dword value: %s", value.c_str());
+				return false;
+			}
+		}
+	}
+	else if (directive == "dq") {
+		// Define qword (8 bytes)
+		std::string value;
+		while (iss >> value) {
+			if (value == ",") continue;
+
+			std::string processedValue = ReplaceSymbols(value);
+
+			try {
+				unsigned long long val = std::stoull(processedValue, nullptr, 0);
+				for (int i = 0; i < 8; i++) {
+					dataBytes.push_back(static_cast<uint8_t>((val >> (i * 8)) & 0xFF));
+				}
+			}
+			catch (...) {
+				LOG_ERROR_F("Invalid qword value: %s", value.c_str());
+				return false;
+			}
+		}
+	}
+
+	if (!dataBytes.empty()) {
+		LOG_DEBUG_F("Data directive %s: %zu bytes", directive.c_str(), dataBytes.size());
+		return true;
+	}
+
+	return false;
+}
 bool CEAssemblyEngine::ProcessCESpecialJump(const std::string& line) {
 	std::istringstream iss(line);
 	std::string opcode;
@@ -1698,6 +1876,152 @@ bool CEAssemblyEngine::ProcessCESpecialJump(const std::string& line) {
 	}
 
 	return false;
+}
+bool CEAssemblyEngine::ProcessCESpecialJump(const std::string& line, uintptr_t address,
+	std::vector<uint8_t>& machineCode) {
+	std::istringstream iss(line);
+	std::string opcode, target;
+	iss >> opcode >> target;
+	std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+
+	// 临时保存当前地址
+	uintptr_t savedAddress = m_currentAddress;
+	m_currentAddress = address;
+
+	bool result = false;
+
+	if (target == "@f") {
+		uintptr_t nextLabel = FindNextLabel(address);
+		if (nextLabel != 0) {
+			LOG_DEBUG_F("Resolved @f from 0x%llX to 0x%llX", address, nextLabel);
+			result = GenerateJumpBytes(opcode, address, nextLabel, machineCode);
+		}
+	}
+	else if (target == "@b") {
+		uintptr_t prevLabel = FindPreviousLabel(address);
+		if (prevLabel != 0) {
+			LOG_DEBUG_F("Resolved @b from 0x%llX to 0x%llX", address, prevLabel);
+			result = GenerateJumpBytes(opcode, address, prevLabel, machineCode);
+		}
+	}
+
+	// 恢复当前地址
+	m_currentAddress = savedAddress;
+	return result;
+}
+
+bool CEAssemblyEngine::GenerateJumpBytes(const std::string& opcode, uintptr_t fromAddr,
+	uintptr_t toAddr, std::vector<uint8_t>& bytes) {
+	bytes.clear();
+
+	if (opcode == "jmp") {
+		int64_t offset = toAddr - (fromAddr + 5);
+
+		if (offset >= -0x80000000LL && offset <= 0x7FFFFFFFLL) {
+			// E9 relative jump
+			bytes.push_back(0xE9);
+			bytes.push_back(static_cast<uint8_t>(offset & 0xFF));
+			bytes.push_back(static_cast<uint8_t>((offset >> 8) & 0xFF));
+			bytes.push_back(static_cast<uint8_t>((offset >> 16) & 0xFF));
+			bytes.push_back(static_cast<uint8_t>((offset >> 24) & 0xFF));
+
+			LOG_DEBUG_F("Generated E9 jump from 0x%llX to 0x%llX (offset: %lld)",
+				fromAddr, toAddr, offset);
+			return true;
+		}
+		else {
+			// FF 25 absolute jump
+			bytes.push_back(0xFF);
+			bytes.push_back(0x25);
+			bytes.push_back(0x00);
+			bytes.push_back(0x00);
+			bytes.push_back(0x00);
+			bytes.push_back(0x00);
+
+			// Add 8 byte target address
+			for (int i = 0; i < 8; ++i) {
+				bytes.push_back((toAddr >> (i * 8)) & 0xFF);
+			}
+
+			LOG_DEBUG_F("Generated FF25 absolute jump from 0x%llX to 0x%llX",
+				fromAddr, toAddr);
+			return true;
+		}
+	}
+	else if (opcode == "call") {
+		int64_t offset = toAddr - (fromAddr + 5);
+
+		if (offset >= -0x80000000LL && offset <= 0x7FFFFFFFLL) {
+			bytes.push_back(0xE8);
+			bytes.push_back(static_cast<uint8_t>(offset & 0xFF));
+			bytes.push_back(static_cast<uint8_t>((offset >> 8) & 0xFF));
+			bytes.push_back(static_cast<uint8_t>((offset >> 16) & 0xFF));
+			bytes.push_back(static_cast<uint8_t>((offset >> 24) & 0xFF));
+
+			LOG_DEBUG_F("Generated E8 call from 0x%llX to 0x%llX", fromAddr, toAddr);
+			return true;
+		}
+		else {
+			LOG_ERROR_F("Call distance too far: %lld", offset);
+			return false;
+		}
+	}
+	else if (opcode.length() > 0 && opcode[0] == 'j') {
+		// 条件跳转
+		return GenerateConditionalJumpBytes(opcode, fromAddr, toAddr, bytes);
+	}
+
+	return false;
+}
+bool CEAssemblyEngine::GenerateConditionalJumpBytes(const std::string& opcode,
+	uintptr_t fromAddr, uintptr_t toAddr,
+	std::vector<uint8_t>& bytes) {
+	// 条件跳转操作码映射
+	static const std::map<std::string, uint8_t> jumpOpcodes = {
+		{"je", 0x74}, {"jz", 0x74},
+		{"jne", 0x75}, {"jnz", 0x75},
+		{"jg", 0x7F}, {"jnle", 0x7F},
+		{"jge", 0x7D}, {"jnl", 0x7D},
+		{"jl", 0x7C}, {"jnge", 0x7C},
+		{"jle", 0x7E}, {"jng", 0x7E},
+		{"ja", 0x77}, {"jnbe", 0x77},
+		{"jae", 0x73}, {"jnb", 0x73}, {"jnc", 0x73},
+		{"jb", 0x72}, {"jnae", 0x72}, {"jc", 0x72},
+		{"jbe", 0x76}, {"jna", 0x76}
+	};
+
+	auto it = jumpOpcodes.find(opcode);
+	if (it == jumpOpcodes.end()) {
+		LOG_ERROR_F("Unknown conditional jump: %s", opcode.c_str());
+		return false;
+	}
+
+	bytes.clear();
+	int64_t offset = toAddr - (fromAddr + 2); // Short jump is 2 bytes
+
+	if (offset >= -128 && offset <= 127) {
+		// Short jump
+		bytes.push_back(it->second);
+		bytes.push_back(static_cast<uint8_t>(offset & 0xFF));
+
+		LOG_DEBUG_F("Generated short conditional jump (0x%02X) to 0x%llX",
+			it->second, toAddr);
+		return true;
+	}
+	else {
+		// Near jump (0F 8x xx xx xx xx)
+		offset = toAddr - (fromAddr + 6); // Near jump is 6 bytes
+		bytes.push_back(0x0F);
+		bytes.push_back(static_cast<uint8_t>(it->second + 0x10)); // Convert to near jump opcode
+		bytes.push_back(static_cast<uint8_t>(offset & 0xFF));
+		bytes.push_back(static_cast<uint8_t>((offset >> 8) & 0xFF));
+		bytes.push_back(static_cast<uint8_t>((offset >> 16) & 0xFF));
+		bytes.push_back(static_cast<uint8_t>((offset >> 24) & 0xFF));
+
+		LOG_DEBUG_F("Generated near conditional jump (0F %02X) to 0x%llX",
+			it->second + 0x10, toAddr);
+		return true;
+	}
 }
 
 // Helper function to generate conditional jumps

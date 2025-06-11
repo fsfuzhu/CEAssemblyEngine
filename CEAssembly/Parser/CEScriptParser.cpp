@@ -48,42 +48,33 @@ bool CEScriptParser::ParseScript(const std::string& content) {
             inDisableBlock = true;
             continue;
         }
-        if (!line.empty() && line.back() == ':') {
-            // 保存这行，等待下一行
-            pendingLine = line;
-            continue;
-        }
-        if (!pendingLine.empty() && line.find("db") == 0) {
-            // 合并为一行
-            line = pendingLine + " " + line;
-            pendingLine.clear();
-        }
-        else if (!pendingLine.empty()) {
-            // 前一行不是要合并的，单独添加
-            if (inEnableBlock) m_enableBlock.push_back(pendingLine);
-            else if (inDisableBlock) m_disableBlock.push_back(pendingLine);
-            pendingLine.clear();
-        }
-        // 特殊处理多标签声明 (如: label(health armor player location))
-        if (inEnableBlock && line.find("label(") == 0 && line.find(" ") != std::string::npos) {
-            // 提取括号内的内容
-            size_t start = line.find('(') + 1;
-            size_t end = line.find(')', start);
-            if (end != std::string::npos) {
-                std::string labelsStr = line.substr(start, end - start);
 
-                // 按空格分割标签
-                std::istringstream labelStream(labelsStr);
-                std::string label;
-                while (labelStream >> label) {
-                    std::string labelLine = "label(" + label + ")";
-                    m_enableBlock.push_back(labelLine);
+        // Check if this is a label definition
+        if (!line.empty() && line.back() == ':') {
+            // First, add any pending line
+            if (!pendingLine.empty()) {
+                if (inEnableBlock) m_enableBlock.push_back(pendingLine);
+                else if (inDisableBlock) m_disableBlock.push_back(pendingLine);
+                pendingLine.clear();
+            }
+
+            // Check if the next line is a db command
+            std::streampos currentPos = stream.tellg();
+            std::string nextLine;
+            if (std::getline(stream, nextLine)) {
+                nextLine = ProcessLine(nextLine);
+                if (!nextLine.empty() && nextLine.find("db") == 0) {
+                    // Merge label with db command
+                    line = line + " " + nextLine;
                 }
-                continue;
+                else {
+                    // Not a db command, so rewind
+                    stream.seekg(currentPos);
+                }
             }
         }
 
-        // 添加到相应的块
+        // Add the line to appropriate block
         if (inEnableBlock) {
             m_enableBlock.push_back(line);
         }
@@ -91,10 +82,13 @@ bool CEScriptParser::ParseScript(const std::string& content) {
             m_disableBlock.push_back(line);
         }
     }
+
+    // Don't forget any pending line at the end
     if (!pendingLine.empty()) {
         if (inEnableBlock) m_enableBlock.push_back(pendingLine);
         else if (inDisableBlock) m_disableBlock.push_back(pendingLine);
     }
+
     return !m_enableBlock.empty();
 }
 

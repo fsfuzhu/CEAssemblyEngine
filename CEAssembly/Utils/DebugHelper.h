@@ -24,8 +24,8 @@ private:
     static bool s_consoleOutput;
     static bool s_fileOutput;
     static std::ofstream s_logFile;
-
 public:
+    static DebugLevel GetLevel() { return s_level; }
     // 初始化调试系统
     static void Initialize(DebugLevel level = DebugLevel::Debug, bool console = true, bool file = true) {
         s_level = level;

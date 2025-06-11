@@ -10,56 +10,31 @@ int main() {
     // Original CE script - @f jumps to next label (not necessarily @@)
     std::string scriptContent = R"(
 [ENABLE]
-aobscanmodule(aobplayer,GTA5_Enhanced.exe,48 8B 40 08 48 85 C0 0F 84 FD 00 00 00 F3 0F 10 80 18 15 00 00)
-alloc(newmem,$1000,aobplayer)
+
+aobscanmodule(INJECT,Notepad.exe,41 81 F2 69 6E 65 49) // should be unique
+alloc(newmem,$1000,INJECT)
+
 label(code)
 label(return)
-label(health armor player location)
-registersymbol(health armor player location)
 
 newmem:
-  push rdx
-  mov [player],rax
-  mov rdx,[rax+30]
-  test rdx,rdx
-  je @f
-  lea rdx,[rdx+50]
-  mov [location],rdx
-@@:
-  lea rdx,[rax+1815]
-  cmp [health],1
-  jne @f
-  mov [rax+280],(float)500
-@@:
-  cmp [armor],1
-  jne @f
-  mov [rdx-0C],(float)100
+mov rax,#123
 code:
-  movss xmm0,[rdx]
-  pop rdx
+  xor r10d,49656E69
   jmp return
 
-newmem+200:
-health:
-dd 0
-armor:
-dd 0
-
-newmem+400:
-player:
-dq 0
-location:
-dq 0
-
-aobplayer+D:
+INJECT:
   jmp newmem
-  nop 3
+  nop 2
 return:
-registersymbol(aobplayer)
+registersymbol(INJECT)
 
 [DISABLE]
-aobplayer+D:
-  db F3 0F 10 80 18 15 00 00
+
+INJECT:
+  db 41 81 F2 69 6E 65 49
+
+unregistersymbol(INJECT)
 dealloc(newmem)
 )";
 
@@ -67,8 +42,8 @@ dealloc(newmem)
     CEAssemblyEngine engine;
 
     // 连接到进程
-    if (engine.AttachToProcess("GTA5_Enhanced.exe")) {
-        std::cout << "成功连接到 GTA5_Enhanced.exe (PID: " << engine.GetTargetPID() << ")" << std::endl;
+    if (engine.AttachToProcess("Notepad.exe")) {
+        std::cout << "成功连接到 Notepad.exe (PID: " << engine.GetTargetPID() << ")" << std::endl;
         // 创建脚本
         auto script = engine.CreateScript("RemoteHack");
 
@@ -112,9 +87,9 @@ dealloc(newmem)
         std::cout << "已断开与进程的连接" << std::endl;
     }
     else {
-        std::cout << "✗ 无法连接到 GTA5_Enhanced.exe: " << engine.GetLastError() << std::endl;
+        std::cout << "✗ 无法连接到 Notepad.exe: " << engine.GetLastError() << std::endl;
         std::cout << "\n解决方案：" << std::endl;
-        std::cout << "1. 启动游戏 (GTA5_Enhanced.exe)" << std::endl;
+        std::cout << "1. 启动游戏 (Notepad.exe)" << std::endl;
         std::cout << "2. 以管理员身份运行此程序" << std::endl;
         std::cout << "3. 检查防病毒软件是否阻止" << std::endl;
 
