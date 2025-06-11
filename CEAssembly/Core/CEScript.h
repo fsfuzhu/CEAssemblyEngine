@@ -32,6 +32,7 @@ public:
 
     // 获取错误信息
     std::string GetLastError() const { return m_lastError; }
+    const std::vector<PatchInfo>& GetPatches() const { return m_patches; }
 
 private:
     CEAssemblyEngine* m_engine;

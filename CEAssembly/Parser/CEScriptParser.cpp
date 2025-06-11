@@ -16,6 +16,7 @@ bool CEScriptParser::ParseScript(const std::string& content) {
     std::string line;
     bool inEnableBlock = false;
     bool inDisableBlock = false;
+    std::string pendingLine; // 用于合并多行
 
     while (std::getline(stream, line)) {
         // 处理行：去掉注释和空白
@@ -24,16 +25,45 @@ bool CEScriptParser::ParseScript(const std::string& content) {
 
         // 检查块标记
         if (line == "[ENABLE]") {
+            // 如果有未处理的行，先添加
+            if (!pendingLine.empty()) {
+                if (inEnableBlock) m_enableBlock.push_back(pendingLine);
+                else if (inDisableBlock) m_disableBlock.push_back(pendingLine);
+                pendingLine.clear();
+            }
+
             inEnableBlock = true;
             inDisableBlock = false;
             continue;
         }
         else if (line == "[DISABLE]") {
+            // 如果有未处理的行，先添加
+            if (!pendingLine.empty()) {
+                if (inEnableBlock) m_enableBlock.push_back(pendingLine);
+                else if (inDisableBlock) m_disableBlock.push_back(pendingLine);
+                pendingLine.clear();
+            }
+
             inEnableBlock = false;
             inDisableBlock = true;
             continue;
         }
-
+        if (!line.empty() && line.back() == ':') {
+            // 保存这行，等待下一行
+            pendingLine = line;
+            continue;
+        }
+        if (!pendingLine.empty() && line.find("db") == 0) {
+            // 合并为一行
+            line = pendingLine + " " + line;
+            pendingLine.clear();
+        }
+        else if (!pendingLine.empty()) {
+            // 前一行不是要合并的，单独添加
+            if (inEnableBlock) m_enableBlock.push_back(pendingLine);
+            else if (inDisableBlock) m_disableBlock.push_back(pendingLine);
+            pendingLine.clear();
+        }
         // 特殊处理多标签声明 (如: label(health armor player location))
         if (inEnableBlock && line.find("label(") == 0 && line.find(" ") != std::string::npos) {
             // 提取括号内的内容
@@ -61,7 +91,10 @@ bool CEScriptParser::ParseScript(const std::string& content) {
             m_disableBlock.push_back(line);
         }
     }
-
+    if (!pendingLine.empty()) {
+        if (inEnableBlock) m_enableBlock.push_back(pendingLine);
+        else if (inDisableBlock) m_disableBlock.push_back(pendingLine);
+    }
     return !m_enableBlock.empty();
 }
 

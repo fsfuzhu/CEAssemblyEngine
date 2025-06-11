@@ -129,10 +129,17 @@ uintptr_t MemoryManager::AllocateNear(uintptr_t nearAddress, size_t size, const 
 bool MemoryManager::Deallocate(const std::string& name) {
     auto it = m_allocations.find(name);
     if (it != m_allocations.end()) {
+        LOG_INFO_F("Deallocating %s at 0x%llX (size: 0x%zX)",
+            name.c_str(), it->second.address, it->second.size);
+
         bool success = FreeMemoryInternal(it->second.address);
         if (success) {
-            LOG_INFO_F("Deallocated memory: %s", name.c_str());
+            LOG_INFO_F("Successfully deallocated memory: %s", name.c_str());
             m_allocations.erase(it);
+        }
+        else {
+            LOG_ERROR_F("Failed to free memory for: %s (error: %d)",
+                name.c_str(), GetLastError());
         }
         return success;
     }
@@ -150,11 +157,33 @@ uintptr_t MemoryManager::GetAllocation(const std::string& name) const {
 }
 
 void MemoryManager::ClearAllAllocations() {
+    if (!m_allocations.empty()) {
+        LOG_INFO_F("Clearing %zu allocations", m_allocations.size());
+    }
+
     for (const auto& pair : m_allocations) {
-        FreeMemoryInternal(pair.second.address);
-        LOG_INFO_F("Freed allocation: %s", pair.first.c_str());
+        LOG_INFO_F("Freeing allocation: %s at 0x%llX",
+            pair.first.c_str(), pair.second.address);
+
+        if (!FreeMemoryInternal(pair.second.address)) {
+            LOG_ERROR_F("Failed to free %s", pair.first.c_str());
+        }
     }
     m_allocations.clear();
+}
+void MemoryManager::ListAllocations() const {
+    if (m_allocations.empty()) {
+        LOG_INFO("No active allocations");
+        return;
+    }
+
+    LOG_INFO_F("Active allocations: %zu", m_allocations.size());
+    for (const auto& pair : m_allocations) {
+        LOG_INFO_F("  %s: 0x%llX (size: 0x%zX)",
+            pair.first.c_str(),
+            pair.second.address,
+            pair.second.size);
+    }
 }
 
 uintptr_t MemoryManager::GetModuleBase(const std::string& moduleName) {
@@ -408,12 +437,63 @@ uintptr_t MemoryManager::SearchMemoryRange(uintptr_t startAddr, uintptr_t endAdd
 }
 
 bool MemoryManager::FreeMemoryInternal(uintptr_t address) {
-    if (m_hProcess) {
-        return VirtualFreeEx(m_hProcess, reinterpret_cast<LPVOID>(address), 0, MEM_RELEASE);
+    if (!m_hProcess) {
+        return VirtualFree(reinterpret_cast<LPVOID>(address), 0, MEM_RELEASE) == TRUE;
     }
-    else {
-        return VirtualFree(reinterpret_cast<LPVOID>(address), 0, MEM_RELEASE);
+
+    // 跨进程释放前，先查询内存信息
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQueryEx(m_hProcess, reinterpret_cast<LPCVOID>(address), &mbi, sizeof(mbi))) {
+        LOG_ERROR_F("Cannot query memory at 0x%llX (error: %d)", address, GetLastError());
+        return false;
     }
+
+    LOG_DEBUG_F("Memory info before free: Base=0x%llX, AllocBase=0x%llX, Size=0x%zX, State=%d, Type=%d",
+        (uintptr_t)mbi.BaseAddress, (uintptr_t)mbi.AllocationBase,
+        mbi.RegionSize, mbi.State, mbi.Type);
+
+    // 检查内存状态
+    if (mbi.State == MEM_FREE) {
+        LOG_WARN_F("Memory at 0x%llX is already free", address);
+        return true;  // 已经释放，返回成功
+    }
+
+    if (mbi.State != MEM_COMMIT && mbi.State != MEM_RESERVE) {
+        LOG_ERROR_F("Invalid memory state at 0x%llX: %d", address, mbi.State);
+        return false;
+    }
+
+    // 尝试使用AllocationBase而不是BaseAddress
+    LPVOID freeAddr = mbi.AllocationBase ? mbi.AllocationBase : reinterpret_cast<LPVOID>(address);
+
+    // 先尝试decommit，再release
+    BOOL decommitResult = TRUE;
+    if (mbi.State == MEM_COMMIT) {
+        decommitResult = VirtualFreeEx(m_hProcess, freeAddr, 0, MEM_DECOMMIT);
+        if (!decommitResult) {
+            LOG_WARN_F("Failed to decommit at 0x%llX (error: %d)",
+                (uintptr_t)freeAddr, GetLastError());
+        }
+    }
+
+    // 释放内存
+    BOOL result = VirtualFreeEx(m_hProcess, freeAddr, 0, MEM_RELEASE);
+
+    if (!result) {
+        DWORD error = GetLastError();
+        LOG_ERROR_F("VirtualFreeEx failed at 0x%llX (error: %d)", (uintptr_t)freeAddr, error);
+
+        // 对于某些错误，我们可以认为操作成功
+        if (error == ERROR_INVALID_ADDRESS || error == ERROR_INVALID_PARAMETER) {
+            LOG_WARN("Memory might have been already freed by the target process");
+            return true;
+        }
+
+        return false;
+    }
+
+    LOG_INFO_F("Successfully freed memory at 0x%llX", (uintptr_t)freeAddr);
+    return true;
 }
 
 uintptr_t MemoryManager::FindSuitableAddress(uintptr_t nearAddress, size_t size) {

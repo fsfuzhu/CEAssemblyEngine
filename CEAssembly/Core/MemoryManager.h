@@ -40,6 +40,7 @@ public:
     uintptr_t AllocateNear(uintptr_t nearAddress, size_t size, const std::string& name);
     bool Deallocate(const std::string& name);
     uintptr_t GetAllocation(const std::string& name) const;
+    void ListAllocations() const;
     void ClearAllAllocations();
 
     // Ä£¿éÐÅÏ¢

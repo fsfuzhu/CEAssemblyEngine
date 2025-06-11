@@ -65,7 +65,7 @@ public:
     // Get component pointers (for advanced usage)
     SymbolManager* GetSymbolManager() { return m_symbolManager.get(); }
     MemoryManager* GetMemoryManager() { return m_memoryManager.get(); }
-
+    void RestoreAllPatches(const std::vector<PatchInfo>& patches);
     // Friend class to allow CEScript access to private methods
     friend class CEScript;
 
@@ -74,7 +74,7 @@ private:
         std::string instruction;
         uintptr_t address;
     };
-
+    void CleanupScript(CEScript* script); 
     // Set current script context
     void SetCurrentScript(CEScript* script) { m_currentScript = script; }
 
@@ -93,7 +93,6 @@ private:
     bool ProcessUnregisterSymbol(const std::string& line);
     bool ProcessDealloc(const std::string& line);
     bool ProcessDbCommand(const std::string& line);
-
     // Assembly instruction processing
     bool ProcessAssemblyInstruction(const std::string& line);
     std::string ProcessFloatConversion(const std::string& line);

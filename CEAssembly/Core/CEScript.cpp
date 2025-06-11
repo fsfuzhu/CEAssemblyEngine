@@ -115,35 +115,28 @@ bool CEScript::Disable() {
         return false;
     }
 
-    // 设置引擎的脚本上下文
+    LOG_INFO_F("Disabling script \"%s\"", m_name.c_str());
+
+    // 设置当前脚本上下文
     m_engine->SetCurrentScript(this);
 
     // 如果有DISABLE块，执行它
     if (!m_disableBlock.empty()) {
+        LOG_DEBUG("Executing DISABLE block");
         if (!m_engine->ProcessDisableBlock(m_disableBlock)) {
             m_lastError = m_engine->GetLastError();
             return false;
         }
     }
     else {
-        // 如果没有DISABLE块，自动恢复原始字节
-        for (const auto& patch : m_patches) {
-            DWORD oldProtect;
-            if (VirtualProtect(reinterpret_cast<LPVOID>(patch.address),
-                patch.originalBytes.size(),
-                PAGE_EXECUTE_READWRITE,
-                &oldProtect)) {
-                memcpy(reinterpret_cast<void*>(patch.address),
-                    patch.originalBytes.data(),
-                    patch.originalBytes.size());
-                VirtualProtect(reinterpret_cast<LPVOID>(patch.address),
-                    patch.originalBytes.size(),
-                    oldProtect,
-                    &oldProtect);
-            }
-        }
+        // 如果没有DISABLE块，手动恢复所有补丁
+        LOG_DEBUG("No DISABLE block, restoring original bytes");
+
+        // 让引擎处理补丁恢复
+        m_engine->RestoreAllPatches(m_patches);
     }
 
     m_enabled = false;
+    LOG_INFO("Script disabled successfully");
     return true;
 }

@@ -560,7 +560,7 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		return false;
 	}
 
-	LOG_DEBUG_F("Processing instruction: %s", line.c_str());
+	LOG_DEBUG_F("Processing instruction at 0x%llX: %s", m_currentAddress, line.c_str());
 
 	// 提取操作码进行特殊处理
 	std::string opcode;
@@ -590,76 +590,84 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 		return ProcessDataDirective(line);
 	}
 
-	// 进行符号替换
+	// 处理指令
 	std::string processedLine = line;
 
-	// 处理 (float) 转换
-	size_t floatPos = processedLine.find("(float)");
-	if (floatPos != std::string::npos) {
-		// 提取 (float) 后的值
-		size_t valueStart = floatPos + 7; // length of "(float)"
-		size_t valueEnd = valueStart;
+	// 1. 处理 (float) 转换
+	processedLine = ProcessFloatConversion(processedLine);
 
-		// 找到值的结尾
-		while (valueEnd < processedLine.length() &&
-			(std::isdigit(processedLine[valueEnd]) ||
-				processedLine[valueEnd] == '.' ||
-				processedLine[valueEnd] == '-')) {
-			valueEnd++;
-		}
-
-		std::string floatValueStr = processedLine.substr(valueStart, valueEnd - valueStart);
-		float floatValue = std::stof(floatValueStr);
-
-		// 对于 mov 指令处理 float
-		if (opcode == "mov") {
-			// 转换为字节
-			uint32_t floatBits = *reinterpret_cast<uint32_t*>(&floatValue);
-
-			// 提取目标操作数
-			size_t commaPos = processedLine.find(',');
-			if (commaPos != std::string::npos) {
-				std::string dest = processedLine.substr(3, commaPos - 3);
-				dest.erase(0, dest.find_first_not_of(" \t"));
-				dest.erase(dest.find_last_not_of(" \t") + 1);
-
-				// 构建新指令
-				std::stringstream newInst;
-				newInst << "mov dword ptr " << dest << ", 0x" << std::hex << floatBits;
-				processedLine = newInst.str();
-
-				LOG_DEBUG_F("Converted float mov: %s", processedLine.c_str());
-			}
-		}
-	}
-
-	// 执行符号替换
+	// 2. 执行符号替换
 	processedLine = ReplaceSymbols(processedLine);
 
-	// 记录符号替换结果
-	if (processedLine != line) {
-		LOG_DEBUG_F("Symbol replacement: %s -> %s", line.c_str(), processedLine.c_str());
-	}
-
-	// 特殊处理 @f 和 @b 标签
+	// 3. 特殊处理 @f 和 @b 标签
 	if (processedLine.find("@f") != std::string::npos ||
 		processedLine.find("@b") != std::string::npos) {
 		return ProcessCESpecialJump(line);
 	}
 
-	// 特殊处理包含大立即数的 mov 指令
-	if (opcode == "mov" && processedLine.find(",0x") != std::string::npos) {
-		if (ProcessSpecialMovInstruction(processedLine)) {
-			return true;
+	// 4. 修复CMP指令的特殊处理
+	if (opcode == "cmp") {
+		// 确保CMP指令格式正确
+		size_t commaPos = processedLine.find(',');
+		if (commaPos != std::string::npos) {
+			std::string beforeComma = processedLine.substr(0, commaPos);
+			std::string afterComma = processedLine.substr(commaPos + 1);
+
+			// 去除空格
+			afterComma.erase(0, afterComma.find_first_not_of(" \t"));
+			afterComma.erase(afterComma.find_last_not_of(" \t") + 1);
+
+			// 检查内存操作数
+			if (beforeComma.find('[') != std::string::npos) {
+				// 确定立即数大小
+				std::string sizeSpec = "";
+
+				try {
+					// 解析立即数值
+					unsigned long long value = 0;
+					if (afterComma.find("0x") == 0) {
+						value = std::stoull(afterComma, nullptr, 16);
+					}
+					else if (std::isdigit(afterComma[0])) {
+						value = std::stoull(afterComma, nullptr, 10);
+					}
+
+					// 根据值大小选择合适的指令格式
+					if (value <= 0x7F) {
+						sizeSpec = "byte ptr ";
+					}
+					else if (value <= 0xFFFF) {
+						sizeSpec = "word ptr ";
+					}
+					else {
+						sizeSpec = "dword ptr ";
+					}
+
+					// 重建指令
+					size_t bracketStart = beforeComma.find('[');
+					if (beforeComma.find("ptr") == std::string::npos) {
+						beforeComma.insert(bracketStart, sizeSpec);
+					}
+
+					processedLine = beforeComma + "," + afterComma;
+					LOG_DEBUG_F("Modified CMP: %s", processedLine.c_str());
+				}
+				catch (...) {
+					// 如果解析失败，添加默认的dword ptr
+					if (beforeComma.find("ptr") == std::string::npos) {
+						size_t bracketStart = beforeComma.find('[');
+						beforeComma.insert(bracketStart, "dword ptr ");
+						processedLine = beforeComma + "," + afterComma;
+					}
+				}
+			}
 		}
 	}
 
-	// 特殊处理 cmp 指令的立即数
-	if (opcode == "cmp" && processedLine.find(",0x") != std::string::npos) {
-		size_t bracketPos = processedLine.find('[');
-		if (bracketPos != std::string::npos) {
-			processedLine.insert(bracketPos, "dword ptr ");
-			LOG_DEBUG_F("Added dword ptr: %s", processedLine.c_str());
+	// 5. 特殊处理包含大立即数的 mov 指令
+	if (opcode == "mov" && processedLine.find(",0x") != std::string::npos) {
+		if (ProcessSpecialMovInstruction(processedLine)) {
+			return true;
 		}
 	}
 
@@ -686,6 +694,15 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 			ks_free(machineCode);
 
 			LOG_DEBUG_F("Assembly successful: %zu bytes", codeSize);
+
+			// 调试输出生成的机器码
+			std::stringstream hexDump;
+			for (size_t i = 0; i < bytes.size(); i++) {
+				hexDump << std::hex << std::setw(2) << std::setfill('0')
+					<< (int)bytes[i] << " ";
+			}
+			LOG_TRACE_F("Machine code: %s", hexDump.str().c_str());
+
 			return WriteBytes(bytes);
 		}
 		else {
@@ -705,7 +722,8 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 	}
 
 	// 其他汇编错误
-	LOG_ERROR_F("Failed to assemble: %s", processedLine.c_str());
+	LOG_ERROR_F("Failed to assemble: %s (error: %s)",
+		processedLine.c_str(), ks_strerror(error));
 	m_lastError = std::string("Assembly error: ") + ks_strerror(error);
 	return false;
 }
@@ -1043,7 +1061,6 @@ bool CEAssemblyEngine::ProcessRegisterSymbol(const std::string& line) {
 std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 	LOG_TRACE_F("Symbol replacement input: %s", line.c_str());
 
-	// 符号化状态
 	enum TokenType {
 		TK_WHITESPACE,
 		TK_OPCODE,
@@ -1052,8 +1069,8 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		TK_SYMBOL,
 		TK_OPERATOR,
 		TK_PUNCTUATION,
-		TK_SPECIAL,     // For @f, @b
-		TK_TYPECAST,    // For (float), (double), etc.
+		TK_SPECIAL,
+		TK_TYPECAST,
 		TK_UNKNOWN
 	};
 
@@ -1079,32 +1096,14 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			continue;
 		}
 
-		// 检查 @f, @b (CE特殊标签) - 不转换这些
+		// 检查 @f, @b 
 		if (line[i] == '@' && i + 1 < line.length()) {
 			if (line[i + 1] == 'f' || line[i + 1] == 'b') {
 				token.type = TK_SPECIAL;
 				token.text = line.substr(i, 2);
 				i += 2;
 				tokens.push_back(token);
-				LOG_TRACE_F("CE special label: %s", token.text.c_str());
 				continue;
-			}
-		}
-
-		// 检查类型转换如 (float), (double)
-		if (line[i] == '(' && i + 1 < line.length()) {
-			size_t closePos = line.find(')', i);
-			if (closePos != std::string::npos) {
-				std::string content = line.substr(i + 1, closePos - i - 1);
-				if (content == "float" || content == "double" || content == "int" ||
-					content == "byte" || content == "word" || content == "dword" || content == "qword") {
-					token.type = TK_TYPECAST;
-					token.text = line.substr(i, closePos - i + 1);
-					i = closePos + 1;
-					tokens.push_back(token);
-					LOG_TRACE_F("Type cast: %s", token.text.c_str());
-					continue;
-				}
 			}
 		}
 
@@ -1135,22 +1134,6 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			}
 			token.text = "0x" + hexNum;
 			tokens.push_back(token);
-			LOG_TRACE_F("CE hex: $%s -> %s", hexNum.c_str(), token.text.c_str());
-			continue;
-		}
-
-		// # 前缀 (立即数)
-		if (line[i] == '#') {
-			i++; // 跳过 #
-			token.type = TK_NUMBER;
-			std::string num;
-			while (i < line.length() && std::isdigit(line[i])) {
-				num += line[i++];
-			}
-			// 保持为十进制
-			token.text = num;
-			tokens.push_back(token);
-			LOG_TRACE_F("Immediate: #%s -> %s", num.c_str(), token.text.c_str());
 			continue;
 		}
 
@@ -1170,8 +1153,6 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		// 字母数字序列
 		if (std::isalnum(line[i]) || line[i] == '_') {
 			std::string word;
-			size_t start = i;
-
 			while (i < line.length() && (std::isalnum(line[i]) || line[i] == '_')) {
 				word += line[i++];
 			}
@@ -1189,14 +1170,42 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			else if (isX64RegisterName(lowerWord)) {
 				token.type = TK_REGISTER;
 			}
-			// 检查是否为纯数字（全为十六进制数字）
-			else if (std::all_of(word.begin(), word.end(),
-				[](char c) { return std::isxdigit(c); })) {
+			// 检查是否为纯十进制数字（重要修复：不要给十进制数加0x前缀）
+			else if (std::all_of(word.begin(), word.end(), ::isdigit)) {
+				// 检查上下文 - 如果前一个token是逗号，这可能是立即数
+				bool isImmediate = false;
+				for (int j = tokens.size() - 1; j >= 0; j--) {
+					if (tokens[j].type == TK_PUNCTUATION && tokens[j].text == ",") {
+						isImmediate = true;
+						break;
+					}
+					if (tokens[j].type != TK_WHITESPACE) {
+						break;
+					}
+				}
 
+				if (isImmediate) {
+					// 是立即数，保持为十进制
+					token.type = TK_NUMBER;
+					token.text = word; // 不加0x前缀！
+				}
+				else {
+					// 可能是符号（如标签）
+					token.type = TK_SYMBOL;
+					token.text = word;
+				}
+				tokens.push_back(token);
+				continue;
+			}
+			// 检查是否为十六进制数（不带0x前缀）
+			else if (std::all_of(word.begin(), word.end(),
+				[](char c) { return std::isxdigit(c); }) &&
+				std::any_of(word.begin(), word.end(),
+					[](char c) { return (c >= 'A' && c <= 'F') ||
+					(c >= 'a' && c <= 'f'); })) {
+				// 包含A-F的十六进制数
 				token.type = TK_NUMBER;
-				// 为所有数字添加 0x 前缀
 				token.text = "0x" + word;
-				LOG_TRACE_F("Auto-hex: %s -> %s", word.c_str(), token.text.c_str());
 				tokens.push_back(token);
 				continue;
 			}
@@ -1218,7 +1227,6 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 
 	// 构建结果
 	std::string result;
-
 	for (size_t idx = 0; idx < tokens.size(); idx++) {
 		const Token& tok = tokens[idx];
 
@@ -1253,7 +1261,21 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 }
 
 bool CEAssemblyEngine::ProcessDisableBlock(const std::vector<std::string>& lines) {
+	LOG_INFO("Processing DISABLE block");
+
 	for (const auto& line : lines) {
+		LOG_DEBUG_F("Processing DISABLE line: %s", line.c_str());
+
+		// 检查是否是 "label: db ..." 格式
+		if (line.find(':') != std::string::npos && line.find("db") != std::string::npos) {
+			// 这是一个合并的db命令
+			if (!ProcessDbCommand(line)) {
+				LOG_ERROR_F("Failed to process db command: %s", line.c_str());
+			}
+			continue;
+		}
+
+		// 正常的命令解析
 		ParsedCommand cmd = m_parser->ParseLine(line);
 
 		switch (cmd.type) {
@@ -1266,7 +1288,16 @@ bool CEAssemblyEngine::ProcessDisableBlock(const std::vector<std::string>& lines
 			break;
 
 		case CommandType::DEALLOC:
-			ProcessDealloc(line);
+			if (!ProcessDealloc(line)) {
+				LOG_ERROR_F("Failed to process dealloc: %s", line.c_str());
+			}
+			break;
+
+		case CommandType::ASSEMBLY:
+			// 可能是标签行，检查是否有db
+			if (line.find("db") != std::string::npos) {
+				ProcessDbCommand(line);
+			}
 			break;
 
 		default:
@@ -1278,51 +1309,134 @@ bool CEAssemblyEngine::ProcessDisableBlock(const std::vector<std::string>& lines
 }
 
 bool CEAssemblyEngine::ProcessDbCommand(const std::string& line) {
-	// Parse the label first if present
-	if (!line.empty() && line.find(':') != std::string::npos) {
-		// Extract label part
-		size_t colonPos = line.find(':');
-		std::string labelPart = line.substr(0, colonPos);
+	LOG_DEBUG_F("Processing DB command: %s", line.c_str());
 
-		// Handle label+offset syntax (e.g., aobplayer+D)
-		size_t plusPos = labelPart.find('+');
+	// 格式1: "label: db XX XX XX"
+	// 格式2: "db XX XX XX" (当前地址)
+
+	size_t colonPos = line.find(':');
+	std::string bytePart;
+
+	if (colonPos != std::string::npos) {
+		// 格式1：有地址标签
+		std::string addressPart = line.substr(0, colonPos);
+		bytePart = line.substr(colonPos + 1);
+
+		// 解析地址
+		size_t plusPos = addressPart.find('+');
 		if (plusPos != std::string::npos) {
-			std::string baseName = labelPart.substr(0, plusPos);
-			std::string offsetStr = labelPart.substr(plusPos + 1);
+			std::string baseName = addressPart.substr(0, plusPos);
+			std::string offsetStr = addressPart.substr(plusPos + 1);
 
 			uintptr_t baseAddr = 0;
 			if (m_symbolManager->GetSymbolAddress(baseName, baseAddr) && baseAddr != 0) {
-				size_t offset = std::stoull(offsetStr, nullptr, 16);
-				m_currentAddress = baseAddr + offset;
-				LOG_DEBUG_F("DB at %s: base=%s(0x%llX) + offset=0x%zX = 0x%llX",
-					labelPart.c_str(), baseName.c_str(), baseAddr, offset, m_currentAddress);
+				try {
+					size_t offset = std::stoull(offsetStr, nullptr, 16);
+					m_currentAddress = baseAddr + offset;
+					LOG_DEBUG_F("Resolved address: %s = 0x%llX + 0x%zX = 0x%llX",
+						addressPart.c_str(), baseAddr, offset, m_currentAddress);
+				}
+				catch (...) {
+					LOG_ERROR_F("Invalid offset: %s", offsetStr.c_str());
+					return false;
+				}
+			}
+			else {
+				LOG_ERROR_F("Cannot resolve base address: %s", baseName.c_str());
+				return false;
 			}
 		}
 		else {
-			// Regular label
-			uintptr_t addr = 0;
-			if (m_symbolManager->GetSymbolAddress(labelPart, addr) && addr != 0) {
-				m_currentAddress = addr;
-				LOG_DEBUG_F("DB at %s: 0x%llX", labelPart.c_str(), addr);
+			// 简单标签
+			if (!m_symbolManager->GetSymbolAddress(addressPart, m_currentAddress) ||
+				m_currentAddress == 0) {
+				LOG_ERROR_F("Cannot resolve address: %s", addressPart.c_str());
+				return false;
 			}
+		}
+	}
+	else {
+		// 格式2：使用当前地址
+		bytePart = line;
+		if (m_currentAddress == 0) {
+			LOG_ERROR("No current address for db command");
+			return false;
 		}
 	}
 
-	// Restore original bytes from patch information
-	for (const auto& patch : m_patches) {
-		if (patch.address == m_currentAddress) {
-			DWORD oldProtect;
-			if (m_memoryManager->ProtectMemory(patch.address, patch.originalBytes.size(),
-				PAGE_EXECUTE_READWRITE, &oldProtect)) {
-				m_memoryManager->WriteMemory(patch.address, patch.originalBytes.data(),
-					patch.originalBytes.size());
-				m_memoryManager->ProtectMemory(patch.address, patch.originalBytes.size(),
-					oldProtect, &oldProtect);
-				return true;
+	// 去除前后空格
+	bytePart.erase(0, bytePart.find_first_not_of(" \t"));
+	bytePart.erase(bytePart.find_last_not_of(" \t") + 1);
+
+	// 查找并跳过 "db" 关键字
+	size_t dbPos = bytePart.find("db");
+	if (dbPos != std::string::npos) {
+		bytePart = bytePart.substr(dbPos + 2);
+	}
+
+	// 解析字节值
+	std::vector<uint8_t> bytes;
+	std::istringstream iss(bytePart);
+	std::string token;
+
+	while (iss >> token) {
+		try {
+			unsigned long byte = std::stoul(token, nullptr, 16);
+			if (byte > 0xFF) {
+				LOG_ERROR_F("Invalid byte value: %s", token.c_str());
+				continue;
 			}
+			bytes.push_back(static_cast<uint8_t>(byte));
+		}
+		catch (...) {
+			LOG_ERROR_F("Failed to parse byte: %s", token.c_str());
 		}
 	}
-	return false;
+
+	if (bytes.empty()) {
+		LOG_ERROR("No bytes to write");
+		return false;
+	}
+
+	LOG_INFO_F("Writing %zu bytes to 0x%llX", bytes.size(), m_currentAddress);
+
+	// 写入字节
+	DWORD oldProtect;
+	if (!m_memoryManager->ProtectMemory(m_currentAddress, bytes.size(),
+		PAGE_EXECUTE_READWRITE, &oldProtect)) {
+		LOG_ERROR_F("Failed to change memory protection (error: %d)", GetLastError());
+		return false;
+	}
+
+	bool success = m_memoryManager->WriteMemory(m_currentAddress,
+		bytes.data(),
+		bytes.size());
+
+	m_memoryManager->ProtectMemory(m_currentAddress, bytes.size(),
+		oldProtect, &oldProtect);
+
+	if (success) {
+		LOG_INFO_F("Successfully wrote %zu bytes to 0x%llX",
+			bytes.size(), m_currentAddress);
+
+		// 验证写入
+		std::vector<uint8_t> verifyBuffer(bytes.size());
+		if (m_memoryManager->ReadMemory(m_currentAddress, verifyBuffer.data(), bytes.size())) {
+			bool match = true;
+			for (size_t i = 0; i < bytes.size(); i++) {
+				if (verifyBuffer[i] != bytes[i]) {
+					match = false;
+					break;
+				}
+			}
+			LOG_DEBUG_F("Verification: %s", match ? "SUCCESS" : "FAILED");
+		}
+	}
+	else {
+		LOG_ERROR_F("Failed to write memory (error: %d)", GetLastError());
+	}
+
+	return success;
 }
 
 bool CEAssemblyEngine::ProcessAssemblyBatch(const std::vector<std::string>& instructions, uintptr_t startAddress) {
@@ -1385,9 +1499,72 @@ bool CEAssemblyEngine::ProcessDealloc(const std::string& line) {
 		return false;
 	}
 
-	return m_memoryManager->Deallocate(cmd.parameters[0]);
-}
+	std::string allocName = cmd.parameters[0];
+	LOG_INFO_F("Deallocating memory: %s", allocName.c_str());
 
+	bool success = m_memoryManager->Deallocate(allocName);
+
+	if (success) {
+		LOG_INFO_F("Successfully deallocated: %s", allocName.c_str());
+
+		// 同时从符号表中移除
+		m_symbolManager->UnregisterSymbol(allocName);
+	}
+	else {
+		LOG_ERROR_F("Failed to deallocate: %s", allocName.c_str());
+		m_lastError = "Failed to deallocate memory: " + allocName;
+	}
+
+	return success;
+}
+void CEAssemblyEngine::RestoreAllPatches(const std::vector<PatchInfo>& patches) {
+	LOG_INFO_F("Restoring %zu patches", patches.size());
+
+	for (const auto& patch : patches) {
+		LOG_DEBUG_F("Restoring patch at 0x%llX (%zu bytes)",
+			patch.address, patch.originalBytes.size());
+
+		// 修改内存保护
+		DWORD oldProtect;
+		if (m_memoryManager->ProtectMemory(patch.address,
+			patch.originalBytes.size(),
+			PAGE_EXECUTE_READWRITE,
+			&oldProtect)) {
+
+			// 写回原始字节
+			bool success = m_memoryManager->WriteMemory(patch.address,
+				patch.originalBytes.data(),
+				patch.originalBytes.size());
+
+			// 恢复内存保护
+			m_memoryManager->ProtectMemory(patch.address,
+				patch.originalBytes.size(),
+				oldProtect,
+				&oldProtect);
+
+			if (success) {
+				LOG_DEBUG_F("Successfully restored patch at 0x%llX", patch.address);
+			}
+			else {
+				LOG_ERROR_F("Failed to restore patch at 0x%llX", patch.address);
+			}
+		}
+		else {
+			LOG_ERROR_F("Failed to change protection at 0x%llX", patch.address);
+		}
+	}
+}
+void CEAssemblyEngine::CleanupScript(CEScript* script) {
+	if (!script) return;
+
+	LOG_INFO("Cleaning up script resources");
+
+	// 恢复所有补丁
+	RestoreAllPatches(script->GetPatches());
+
+	// 清理所有分配的内存
+	m_memoryManager->ClearAllAllocations();
+}
 // Helper function for data directives
 bool CEAssemblyEngine::ProcessDataDirective(const std::string& line) {
 	std::istringstream iss(line);
