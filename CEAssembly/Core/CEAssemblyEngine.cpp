@@ -812,15 +812,17 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 	return false;
 }
 
-// 新增：Float转换处理函数
+// Enhanced float conversion that handles memory operands
 std::string CEAssemblyEngine::ProcessFloatConversion(const std::string& line) {
 	std::string result = line;
 
 	size_t floatPos = result.find("(float)");
 	while (floatPos != std::string::npos) {
+		// Extract the float value
 		size_t valueStart = floatPos + 7;
 		size_t valueEnd = valueStart;
 
+		// Find the end of the number
 		while (valueEnd < result.length() &&
 			(std::isdigit(result[valueEnd]) || result[valueEnd] == '.' || result[valueEnd] == '-')) {
 			valueEnd++;
@@ -830,11 +832,47 @@ std::string CEAssemblyEngine::ProcessFloatConversion(const std::string& line) {
 		float floatValue = std::stof(floatValueStr);
 		uint32_t floatBits = *reinterpret_cast<uint32_t*>(&floatValue);
 
+		// Extract opcode and check instruction type
+		std::istringstream iss(result);
+		std::string opcode;
+		iss >> opcode;
+		std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+
+		// For mov instructions with memory operands
+		if (opcode == "mov") {
+			// Find the comma that separates operands
+			size_t commaPos = result.find(',');
+			if (commaPos != std::string::npos && commaPos < floatPos) {
+				// Extract destination operand
+				std::string dest = result.substr(3, commaPos - 3); // skip "mov"
+				dest.erase(0, dest.find_first_not_of(" \t"));
+				dest.erase(dest.find_last_not_of(" \t") + 1);
+
+				// Check if it's a memory operand
+				if (dest.find('[') != std::string::npos) {
+					// Ensure we have 'dword ptr' for memory operands
+					if (dest.find("ptr") == std::string::npos) {
+						size_t bracketPos = dest.find('[');
+						dest.insert(bracketPos, "dword ptr ");
+					}
+
+					// Build new instruction with hex value
+					std::stringstream newInst;
+					newInst << "mov " << dest << ", 0x" << std::hex << floatBits;
+					result = newInst.str();
+
+					LOG_DEBUG_F("Float conversion: %s -> %s", line.c_str(), result.c_str());
+					return result; // Only process one float per call
+				}
+			}
+		}
+
+		// For other instructions or non-memory operands, just replace with hex
 		std::stringstream hexValue;
 		hexValue << "0x" << std::hex << floatBits;
-
 		result.replace(floatPos, valueEnd - floatPos, hexValue.str());
 
+		// Look for next occurrence
 		floatPos = result.find("(float)", floatPos + hexValue.str().length());
 	}
 
@@ -1313,11 +1351,22 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 
 			LOG_DEBUG_F("Trying to resolve symbol: %s", tok.text.c_str());
 
-			if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
-				result += std::to_string(capturedVal);
-				LOG_DEBUG_F("Symbol %s -> captured %llu", tok.text.c_str(), capturedVal);
+			// First check if it's a captured variable (like s1, s2)
+			if (tok.text.length() >= 2 && tok.text[0] == 's' && std::isdigit(tok.text[1])) {
+				// This might be a captured variable
+				if (m_symbolManager->GetCapturedValue(tok.text, capturedVal)) {
+					// For captured variables, we need to check if it's an offset or a value
+					// In the context of [rax+s1], it's an offset, so convert to hex
+					std::stringstream ss;
+					ss << "0x" << std::hex << capturedVal;
+					result += ss.str();
+					LOG_DEBUG_F("Captured variable %s -> 0x%llX", tok.text.c_str(), capturedVal);
+					continue;
+				}
 			}
-			else if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr)) {
+
+			// Then check normal symbols
+			if (m_symbolManager->GetSymbolAddress(tok.text, symbolAddr)) {
 				if (symbolAddr != 0) {
 					std::stringstream ss;
 					ss << "0x" << std::hex << symbolAddr;
@@ -1460,12 +1509,32 @@ bool CEAssemblyEngine::ProcessDbCommand(const std::string& line) {
 		bytePart = bytePart.substr(dbPos + 2);
 	}
 
-	// 解析字节值
+	// 解析字节值 - 需要处理符号替换
 	std::vector<uint8_t> bytes;
 	std::istringstream iss(bytePart);
 	std::string token;
 
 	while (iss >> token) {
+		// Check if it's a captured variable symbol
+		if (token.length() >= 2 && token[0] == 's' && std::isdigit(token[1])) {
+			uint64_t capturedVal;
+			if (m_symbolManager->GetCapturedValue(token, capturedVal)) {
+				// Captured value is typically a byte or word
+				if (capturedVal <= 0xFF) {
+					bytes.push_back(static_cast<uint8_t>(capturedVal));
+					LOG_DEBUG_F("Captured variable %s = 0x%02X", token.c_str(), capturedVal);
+				}
+				else {
+					// Multi-byte value, add as little-endian
+					bytes.push_back(static_cast<uint8_t>(capturedVal & 0xFF));
+					bytes.push_back(static_cast<uint8_t>((capturedVal >> 8) & 0xFF));
+					LOG_DEBUG_F("Captured variable %s = 0x%04X", token.c_str(), capturedVal);
+				}
+				continue;
+			}
+		}
+
+		// Normal hex byte
 		try {
 			unsigned long byte = std::stoul(token, nullptr, 16);
 			if (byte > 0xFF) {
@@ -1537,8 +1606,11 @@ bool CEAssemblyEngine::ProcessAssemblyBatch(const std::vector<std::string>& inst
 		batchAssembly += ReplaceSymbols(line);
 	}
 
+	// Preprocess anonymous labels BEFORE sending to Keystone
+	batchAssembly = PreprocessAnonymousLabels(batchAssembly);
+
 	LOG_DEBUG_F("Batch assembly at 0x%llX (%zu instructions):", startAddress, instructions.size());
-	LOG_DEBUG_F("Batch content:\n%s", batchAssembly.c_str());
+	LOG_DEBUG_F("Preprocessed content:\n%s", batchAssembly.c_str());
 
 	unsigned char* encode;
 	size_t size;
@@ -2105,6 +2177,110 @@ uintptr_t CEAssemblyEngine::FindPreviousLabel(uintptr_t fromAddress) {
 	if (result != 0) {
 		LOG_TRACE_F("Found previous label '%s' at 0x%llX before 0x%llX",
 			resultName.c_str(), result, fromAddress);
+	}
+
+	return result;
+}
+std::string CEAssemblyEngine::PreprocessAnonymousLabels(const std::string& code) {
+	std::vector<std::string> lines;
+	std::istringstream stream(code);
+	std::string line;
+
+	// Split into lines
+	while (std::getline(stream, line)) {
+		lines.push_back(line);
+	}
+
+	// First pass: Replace @@ with unique labels
+	std::map<size_t, std::string> labelPositions; // line index -> label name
+	int anonLabelCounter = 0;
+
+	for (size_t i = 0; i < lines.size(); ++i) {
+		std::string& currentLine = lines[i];
+
+		// Trim whitespace
+		size_t firstNonSpace = currentLine.find_first_not_of(" \t");
+		if (firstNonSpace == std::string::npos) continue;
+
+		// Check if it's an anonymous label
+		if (currentLine.substr(firstNonSpace) == "@@:") {
+			std::string newLabel = "__anon_label_" + std::to_string(anonLabelCounter++);
+			labelPositions[i] = newLabel;
+			currentLine = newLabel + ":";
+			LOG_TRACE_F("Replaced @@ at line %zu with %s", i, newLabel.c_str());
+		}
+		// Check for any other label definition
+		else if (currentLine.find(':') != std::string::npos &&
+			currentLine.find("::") == std::string::npos) { // Not a C++ scope operator
+			size_t colonPos = currentLine.find(':');
+			std::string labelName = currentLine.substr(firstNonSpace, colonPos - firstNonSpace);
+			// Remove any whitespace from label name
+			labelName.erase(std::remove_if(labelName.begin(), labelName.end(), ::isspace), labelName.end());
+			if (!labelName.empty()) {
+				labelPositions[i] = labelName;
+				LOG_TRACE_F("Found label %s at line %zu", labelName.c_str(), i);
+			}
+		}
+	}
+
+	// Second pass: Replace @f and @b with actual label names
+	for (size_t i = 0; i < lines.size(); ++i) {
+		std::string& currentLine = lines[i];
+
+		// Replace @f with next label
+		size_t atfPos = currentLine.find("@f");
+		while (atfPos != std::string::npos) {
+			// Find next label after current line
+			std::string nextLabel;
+			for (size_t j = i + 1; j < lines.size(); ++j) {
+				if (labelPositions.find(j) != labelPositions.end()) {
+					nextLabel = labelPositions[j];
+					break;
+				}
+			}
+
+			if (!nextLabel.empty()) {
+				currentLine.replace(atfPos, 2, nextLabel);
+				LOG_TRACE_F("Replaced @f at line %zu with %s", i, nextLabel.c_str());
+			}
+			else {
+				LOG_ERROR_F("No forward label found for @f at line %zu", i);
+				currentLine.replace(atfPos, 2, "__error_no_forward_label");
+			}
+
+			atfPos = currentLine.find("@f", atfPos + nextLabel.length());
+		}
+
+		// Replace @b with previous label
+		size_t atbPos = currentLine.find("@b");
+		while (atbPos != std::string::npos) {
+			// Find previous label before current line
+			std::string prevLabel;
+			for (int j = i - 1; j >= 0; --j) {
+				if (labelPositions.find(j) != labelPositions.end()) {
+					prevLabel = labelPositions[j];
+					break;
+				}
+			}
+
+			if (!prevLabel.empty()) {
+				currentLine.replace(atbPos, 2, prevLabel);
+				LOG_TRACE_F("Replaced @b at line %zu with %s", i, prevLabel.c_str());
+			}
+			else {
+				LOG_ERROR_F("No backward label found for @b at line %zu", i);
+				currentLine.replace(atbPos, 2, "__error_no_backward_label");
+			}
+
+			atbPos = currentLine.find("@b", atbPos + prevLabel.length());
+		}
+	}
+
+	// Reconstruct the code
+	std::string result;
+	for (const auto& line : lines) {
+		if (!result.empty()) result += "\n";
+		result += line;
 	}
 
 	return result;

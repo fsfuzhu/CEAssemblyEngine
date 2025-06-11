@@ -1,4 +1,4 @@
-// PassManager.cpp - 修复所有编译错误的完整版本
+// PassManager.cpp - 修复捕获变量处理的完整版本
 #include "PassManager.h"
 #include "Core/CEAssemblyEngine.h"
 #include "Symbol/SymbolManager.h"
@@ -237,25 +237,97 @@ PassResult PreprocessingPass::Execute(std::vector<InstructionContext>& instructi
         if (ctx.originalLine.empty()) continue;
 
         // 1. 检查是否是标签定义（以冒号结尾）
-        if (ctx.originalLine.back() == ':') {
-            ctx.isLabelDef = true;
-            ctx.labelName = ctx.originalLine.substr(0, ctx.originalLine.length() - 1);
-            ctx.commandType = CommandType::ASSEMBLY;
+        // First: Convert all @@ labels to unique names
+        int anonLabelCounter = 0;
+        std::map<size_t, std::string> labelMapping; // instruction index -> label name
+        // Phase 1: Replace @@ with unique labels
+        for (size_t i = 0; i < instructions.size(); ++i) {
+            auto& ctx = instructions[i];
 
-            LOG_DEBUG_F("Label definition: %s", ctx.labelName.c_str());
+            // Check if it's an anonymous label definition
+            if (ctx.originalLine == "@@:") {
+                std::string uniqueLabel = "__anon_" + std::to_string(anonLabelCounter++);
+                ctx.processedLine = uniqueLabel + ":";
+                ctx.isLabelDef = true;
+                ctx.labelName = uniqueLabel;
+                ctx.commandType = CommandType::ASSEMBLY;
+                labelMapping[i] = uniqueLabel;
 
-            // 处理 label+offset 语法
-            if (ctx.labelName.find('+') != std::string::npos) {
-                ctx.needsSymbolResolution = true;
-                size_t plusPos = ctx.labelName.find('+');
-                std::string baseName = ctx.labelName.substr(0, plusPos);
-                ctx.unresolvedSymbols.push_back(baseName);
-                LOG_TRACE_F("Label with offset: %s (base: %s)", ctx.labelName.c_str(), baseName.c_str());
+                LOG_DEBUG_F("Converted @@ to %s at line %zu", uniqueLabel.c_str(), i);
+                result.instructionsModified++;
             }
-
-            continue;
+            // Regular label
+            else if (!ctx.originalLine.empty() && ctx.originalLine.back() == ':') {
+                ctx.isLabelDef = true;
+                ctx.labelName = ctx.originalLine.substr(0, ctx.originalLine.length() - 1);
+                ctx.commandType = CommandType::ASSEMBLY;
+                labelMapping[i] = ctx.labelName;
+            }
         }
 
+        // Phase 2: Replace @f and @b in instructions
+        for (size_t i = 0; i < instructions.size(); ++i) {
+            auto& ctx = instructions[i];
+
+            if (ctx.processedLine.find("@f") != std::string::npos ||
+                ctx.processedLine.find("@b") != std::string::npos) {
+
+                std::string processed = ctx.processedLine;
+
+                // Replace @f with next label
+                size_t pos = processed.find("@f");
+                while (pos != std::string::npos) {
+                    // Find next label
+                    std::string nextLabel;
+                    for (size_t j = i + 1; j < instructions.size(); ++j) {
+                        if (labelMapping.find(j) != labelMapping.end()) {
+                            nextLabel = labelMapping[j];
+                            break;
+                        }
+                    }
+
+                    if (!nextLabel.empty()) {
+                        processed.replace(pos, 2, nextLabel);
+                        LOG_TRACE_F("Replaced @f with %s in: %s", nextLabel.c_str(), ctx.originalLine.c_str());
+                    }
+                    else {
+                        result.warnings.push_back("No forward label found for @f at: " + ctx.originalLine);
+                        processed.replace(pos, 2, "__no_forward_label");
+                    }
+
+                    pos = processed.find("@f", pos + 1);
+                }
+
+                // Replace @b with previous label
+                pos = processed.find("@b");
+                while (pos != std::string::npos) {
+                    // Find previous label
+                    std::string prevLabel;
+                    for (int j = i - 1; j >= 0; --j) {
+                        if (labelMapping.find(j) != labelMapping.end()) {
+                            prevLabel = labelMapping[j];
+                            break;
+                        }
+                    }
+
+                    if (!prevLabel.empty()) {
+                        processed.replace(pos, 2, prevLabel);
+                        LOG_TRACE_F("Replaced @b with %s in: %s", prevLabel.c_str(), ctx.originalLine.c_str());
+                    }
+                    else {
+                        result.warnings.push_back("No backward label found for @b at: " + ctx.originalLine);
+                        processed.replace(pos, 2, "__no_backward_label");
+                    }
+
+                    pos = processed.find("@b", pos + 1);
+                }
+
+                if (processed != ctx.processedLine) {
+                    ctx.processedLine = processed;
+                    result.instructionsModified++;
+                }
+            }
+        }
         // 2. 处理 (float) 转换
         if (ctx.processedLine.find("(float)") != std::string::npos) {
             std::string processed = engine->ProcessFloatConversion(ctx.processedLine);
@@ -350,8 +422,15 @@ PassResult PreprocessingPass::Execute(std::vector<InstructionContext>& instructi
                         isNumber = true;
                     }
 
+                    // 特别检查捕获的变量（如 s1, s2）
+                    if (!isNumber && token.length() >= 2 && token[0] == 's' && std::isdigit(token[1])) {
+                        // 这是一个捕获的变量
+                        ctx.needsSymbolResolution = true;
+                        ctx.unresolvedSymbols.push_back(token);
+                        LOG_TRACE_F("Captured variable symbol: %s", token.c_str());
+                    }
                     // 如果不是数字，可能是符号
-                    if (!isNumber && !token.empty()) {
+                    else if (!isNumber && !token.empty()) {
                         ctx.needsSymbolResolution = true;
                         ctx.unresolvedSymbols.push_back(token);
                         LOG_TRACE_F("Potential symbol: %s", token.c_str());
@@ -434,6 +513,14 @@ PassResult SymbolCollectionPass::Execute(std::vector<InstructionContext>& instru
                 auto capturedVars = scanner->GetCapturedVariables();
                 for (const auto& [name, data] : capturedVars) {
                     symbolMgr->RegisterCapturedData(name, data);
+
+                    // 调试输出捕获的值
+                    uint64_t value = 0;
+                    for (size_t i = 0; i < data.size() && i < 8; ++i) {
+                        value |= static_cast<uint64_t>(data[i]) << (i * 8);
+                    }
+                    LOG_DEBUG_F("Captured variable '%s' = 0x%llX (%zu bytes)",
+                        name.c_str(), value, data.size());
                 }
                 scanner->ClearCapturedVariables();
             }
@@ -476,7 +563,7 @@ PassResult SymbolCollectionPass::Execute(std::vector<InstructionContext>& instru
         case CommandType::LABEL:
             if (!ctx.parameters.empty()) {
                 std::string labelName = ctx.parameters[0];
-                // 所有标签初始都注册为地址0，后续pass会更新
+                // 所有标签初始注册为地址0，后续pass会更新
                 symbolMgr->RegisterSymbol(labelName, 0, 0, true);
                 LOG_DEBUG_F("Label '%s' declared", labelName.c_str());
             }
@@ -671,8 +758,8 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
             continue;
         }
 
-        // Prepare assembled instruction
-        std::string asmLine = engine->ReplaceSymbols(ctx.processedLine);
+        // Prepare assembled instruction - DO NOT replace symbols yet for size estimation
+        std::string asmLine = engine->ReplaceSymbolsForEstimation(ctx.processedLine);
 
         // Use Keystone to get instruction size
         unsigned char* encode = nullptr;
@@ -764,7 +851,7 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
             }
         }
 
-        // Normal assembly
+        // Normal assembly - NOW we replace symbols with actual values
         std::string asmLine = engine->ReplaceSymbols(ctx.processedLine);
         LOG_DEBUG_F("Assembling at 0x%llX: '%s' -> '%s'",
             ctx.address, ctx.processedLine.c_str(), asmLine.c_str());
@@ -877,7 +964,7 @@ PassResult CodeEmissionPass::Execute(std::vector<InstructionContext>& instructio
         std::vector<uint8_t> originalBytes;
         std::vector<uint8_t> newBytes;
         std::string description;
-        bool critical;  // 是否是关键操作（如主要的 hook 点）
+        bool critical;  // 是否是关键操作（如重要的 hook 点）
     };
 
     std::vector<WriteOperation> writeOps;
@@ -898,7 +985,7 @@ PassResult CodeEmissionPass::Execute(std::vector<InstructionContext>& instructio
         // 判断是否是关键操作
         op.critical = false;
         if (ctx.originalLine.find("jmp") == 0 || ctx.originalLine.find("call") == 0) {
-            // 主要的跳转和调用通常是关键的
+            // 重要的跳转和调用通常是关键的
             op.critical = true;
         }
 

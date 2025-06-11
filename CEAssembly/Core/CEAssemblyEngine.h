@@ -106,7 +106,8 @@ private:
         std::string instruction;
         uintptr_t address;
     };
-
+    std::string PreprocessAnonymousLabels(const std::string& code);
+    std::map<size_t, std::string> m_anonLabelMapping; // line number -> generated label name
     void CleanupScript(CEScript* script);
 
     // Set current script context
