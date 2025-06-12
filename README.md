@@ -112,7 +112,7 @@ CEAssemblerEngine/
 
 ```assembly
 [ENABLE]
-aobscanmodule(INJECT,GTA5_Enhanced.exe,4A 8B 14 10 48 8B 43 10) // should be unique
+aobscanmodule(INJECT,notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
 alloc(newmem,$1000,INJECT)
 label(code)
 label(return)
@@ -148,7 +148,7 @@ dealloc(newmem)
 #### Pass 2: 符号收集 (Symbol Collection)
 
 1. **aobscanmodule**
-   * 在模块 `GTA5_Enhanced.exe` 内搜索特征码 `4A 8B 14 10 48 8B 43 10`
+   * 在模块 `notepad.exe` 内搜索特征码 `4A 8B 14 10 48 8B 43 10`
    * 找到唯一匹配地址 `0x7FF7 7569 2E0A`
    * 注册符号 `INJECT = 0x7FF7 7569 2E0A`
 

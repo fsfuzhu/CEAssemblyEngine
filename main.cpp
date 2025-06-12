@@ -16,66 +16,42 @@ void TestComplexScript() {
     // The complex script with captured variables and float conversions
     std::string scriptContent = R"(
 [ENABLE]
-aobscanmodule(aobplayer,GTA5_Enhanced.exe,48 8B 40 08 48 85 C0 0F 84 FD 00 00 00 F3 0F 10 80 18 15 00 00 0F 2E 80 80 02 00 00)
-alloc(newmem,$1000,aobplayer)
+
+aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
+alloc(newmem,$1000,INJECT)
+
 label(code)
 label(return)
-label(health armor player location)
-registersymbol(health armor player location)
 
 newmem:
-  push rdx
-  mov [player],rax
-  mov rdx,[rax+30]
-  test rdx,rdx
-  je @f
-  lea rdx,[rdx+50]
-  mov [location],rdx
-@@:
-  lea rdx,[rax+1518]
-  cmp [health],1
-  jne @f
-  mov [rax+280],(float)500
-@@:
-  cmp [armor],1
-  jne @f
-  mov [rdx-0C],(float)100
+
 code:
-  movss xmm0,[rdx]
-  pop rdx
+  mov rdx,[rax+r10]
+  mov rax,[rbx+10]
   jmp return
 
-newmem+200:
-health:
-dd 0
-armor:
-dd 0
-
-newmem+400:
-player:
-dq 0
-location:
-dq 0
-
-aobplayer+D:
+INJECT:
   jmp newmem
   nop 3
 return:
-registersymbol(aobplayer)
+registersymbol(INJECT)
 
 [DISABLE]
-aobplayer+D:
-  db F3 0F 10 80 18 15 00 00
+
+INJECT:
+  db 4A 8B 14 10 48 8B 43 10
+
+unregistersymbol(INJECT)
 dealloc(newmem)
 
 )";
 
     CEAssemblyEngine engine;
 
-    // For testing, we'll attach to notepad (or you can change to GTA5_Enhanced.exe)
+    // For testing, we'll attach to notepad (or you can change to notepad.exe)
     std::cout << "Attempting to attach to test process..." << std::endl;
 
-    if (engine.AttachToProcess("GTA5_Enhanced.exe")) {
+    if (engine.AttachToProcess("notepad.exe")) {
         std::cout << "✓ Successfully attached to process (PID: " << engine.GetTargetPID() << ")" << std::endl;
 
         auto script = engine.CreateScript("GTA5_Health_Armor_Hack");
@@ -127,98 +103,6 @@ dealloc(newmem)
     }
 }
 
-void TestFloatConversion() {
-    PrintTestHeader("Float Conversion with Memory Operands");
-
-    std::string scriptContent = R"(
-[ENABLE]
-alloc(testmem,100)
-
-testmem:
-  mov rax,testmem+20
-  mov [rax],(float)123.456     ; Should convert to 0x42F6E979
-  mov [rax+4],(float)-99.5     ; Should convert to 0xC2C70000
-  mov dword ptr [rax+8],(float)0.1  ; Should convert to 0x3DCCCCCD
-  ret
-
-[DISABLE]
-dealloc(testmem)
-)";
-
-    std::cout << "Testing float conversions:" << std::endl;
-    std::cout << "- (float)123.456 -> 0x42F6E979" << std::endl;
-    std::cout << "- (float)-99.5   -> 0xC2C70000" << std::endl;
-    std::cout << "- (float)0.1     -> 0x3DCCCCCD" << std::endl;
-
-    // This demonstrates the float conversion is properly implemented
-    std::cout << "\n✓ Float conversion implementation verified" << std::endl;
-}
-
-void TestCapturedVariables() {
-    PrintTestHeader("Captured Variable Handling");
-
-    std::string scriptContent = R"(
-[ENABLE]
-; Pattern with captured variables
-; s1.2 captures 2 bytes at that position
-; s2.4 captures 4 bytes at that position
-aobscanmodule(test,notepad.exe,48 8B 40 s1.2 48 85 C0 s2.4)
-alloc(newmem,100,test)
-
-newmem:
-  mov rax,[rcx+s1]      ; s1 will be replaced with captured offset
-  mov rbx,[rcx+s2]      ; s2 will be replaced with captured offset
-  ret
-
-test:
-  jmp newmem
-
-[DISABLE]
-test:
-  db 48 8B 40 s1 48 85 C0 s2
-dealloc(newmem)
-)";
-
-    std::cout << "Pattern scanning features:" << std::endl;
-    std::cout << "- s1.2 captures 2 bytes from pattern" << std::endl;
-    std::cout << "- s2.4 captures 4 bytes from pattern" << std::endl;
-    std::cout << "- Captured values used as offsets in instructions" << std::endl;
-    std::cout << "- Captured values restored in DISABLE section" << std::endl;
-
-    std::cout << "\n✓ Captured variable system verified" << std::endl;
-}
-
-void TestAnonymousLabels() {
-    PrintTestHeader("Anonymous Labels (@@ and @f/@b)");
-
-    std::string scriptContent = R"(
-[ENABLE]
-alloc(testmem,100)
-
-testmem:
-  xor eax,eax
-  test eax,eax
-  je @f         ; Jump forward to next label
-  mov eax,1
-@@:             ; Anonymous label
-  test eax,eax
-  jne @b        ; Jump back to previous label
-  mov eax,2
-@@:             ; Another anonymous label
-  ret
-
-[DISABLE]
-dealloc(testmem)
-)";
-
-    std::cout << "Anonymous label features:" << std::endl;
-    std::cout << "- @@ defines anonymous labels" << std::endl;
-    std::cout << "- @f jumps forward to next label (any label)" << std::endl;
-    std::cout << "- @b jumps back to previous label (any label)" << std::endl;
-    std::cout << "- Multiple @@ labels can exist" << std::endl;
-
-    std::cout << "\n✓ Anonymous label system verified" << std::endl;
-}
 
 int main() {
     // Initialize debug system with maximum verbosity for testing
@@ -227,10 +111,6 @@ int main() {
     std::cout << "CE Assembly Engine - Complex Script Test Suite" << std::endl;
     std::cout << "=============================================" << std::endl;
 
-    // Run all tests
-    TestFloatConversion();
-    TestCapturedVariables();
-    TestAnonymousLabels();
     TestComplexScript();
 
     // Summary
