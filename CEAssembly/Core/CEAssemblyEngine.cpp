@@ -370,8 +370,15 @@ size_t CEAssemblyEngine::EstimateInstructionSize(const std::string& line) {
 	if (opcode == "dd") return 4;
 	if (opcode == "dq") return 8;
 
+	// **添加：先处理浮点转换**
+	std::string processedLine = line;
+	if (line.find("(float)") != std::string::npos) {
+		processedLine = ProcessFloatConversion(line);
+		LOG_TRACE_F("Float conversion before estimation: %s -> %s", line.c_str(), processedLine.c_str());
+	}
+
 	// 使用临时符号替换来估算大小
-	std::string processedLine = ReplaceSymbolsForEstimation(line);
+	processedLine = ReplaceSymbolsForEstimation(processedLine);
 
 	// 使用Keystone估算大小
 	unsigned char* machineCode = nullptr;
@@ -468,6 +475,7 @@ std::string CEAssemblyEngine::ReplaceSymbolsForEstimation(const std::string& lin
 		TK_PUNCTUATION,
 		TK_SPECIAL,
 		TK_TYPECAST,
+		TK_SIZE_SPEC,  // 新增：大小指示符
 		TK_UNKNOWN
 	};
 
@@ -566,6 +574,10 @@ std::string CEAssemblyEngine::ReplaceSymbolsForEstimation(const std::string& lin
 			// Check if register
 			else if (isX64RegisterName(lowerWord)) {
 				token.type = TK_REGISTER;
+			}
+			// 检查是否是大小指示符
+			else if (isSizeSpecifier(lowerWord)) {
+				token.type = TK_SIZE_SPEC;
 			}
 			// Check if pure number (all hex digits)
 			else if (std::all_of(word.begin(), word.end(),
@@ -850,8 +862,18 @@ std::string CEAssemblyEngine::ProcessFloatConversion(const std::string& line) {
 
 				// Check if it's a memory operand
 				if (dest.find('[') != std::string::npos) {
-					// Ensure we have 'dword ptr' for memory operands
-					if (dest.find("ptr") == std::string::npos) {
+					// **关键修改：强制使用 dword ptr，即使已经有 ptr**
+					size_t ptrPos = dest.find("ptr");
+					if (ptrPos != std::string::npos) {
+						// 找到 ptr 前面的大小指示符并替换为 dword
+						size_t start = dest.find_last_of(" \t", ptrPos - 1);
+						if (start == std::string::npos) start = 0;
+						else start++;
+
+						dest = dest.substr(0, start) + "dword" + dest.substr(ptrPos);
+					}
+					else {
+						// 没有 ptr，在方括号前插入 dword ptr
 						size_t bracketPos = dest.find('[');
 						dest.insert(bracketPos, "dword ptr ");
 					}
@@ -863,6 +885,16 @@ std::string CEAssemblyEngine::ProcessFloatConversion(const std::string& line) {
 
 					LOG_DEBUG_F("Float conversion: %s -> %s", line.c_str(), result.c_str());
 					return result; // Only process one float per call
+				}
+				else {
+					// 对于非内存操作数（如寄存器），也要确保是32位操作
+					// 直接替换浮点值为十六进制
+					std::stringstream hexValue;
+					hexValue << "0x" << std::hex << floatBits;
+					result.replace(floatPos, valueEnd - floatPos, hexValue.str());
+
+					LOG_DEBUG_F("Float conversion (register): %s -> %s", line.c_str(), result.c_str());
+					return result;
 				}
 			}
 		}
@@ -1164,9 +1196,12 @@ bool CEAssemblyEngine::ProcessLabel(const std::string& line) {
 		return false;
 	}
 
-	std::string labelName = cmd.parameters[0];
-	m_symbolManager->RegisterSymbol(labelName, 0, 0, true);
-	LOG_DEBUG_F("Label '%s' declared", labelName.c_str());
+	// 注册所有标签（支持多标签声明）
+	for (const auto& labelName : cmd.parameters) {
+		m_symbolManager->RegisterSymbol(labelName, 0, 0, true);
+		LOG_DEBUG_F("Label '%s' declared", labelName.c_str());
+	}
+
 	return true;
 }
 
@@ -1176,7 +1211,20 @@ bool CEAssemblyEngine::ProcessRegisterSymbol(const std::string& line) {
 		m_lastError = "Invalid registersymbol syntax";
 		return false;
 	}
-	// This would implement global symbol registration logic
+
+	// 注册所有符号为全局符号
+	for (const auto& symbolName : cmd.parameters) {
+		// 获取符号当前地址（如果已存在）
+		uintptr_t address = 0;
+		m_symbolManager->GetSymbolAddress(symbolName, address);
+
+		// 如果符号已有地址，保持地址，否则设为0
+		m_symbolManager->RegisterSymbol(symbolName, address, 0, true);
+
+		// TODO: 实现真正的全局符号注册逻辑
+		LOG_INFO_F("Global symbol '%s' registered at 0x%llX", symbolName.c_str(), address);
+	}
+
 	return true;
 }
 
@@ -1193,6 +1241,7 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 		TK_PUNCTUATION,
 		TK_SPECIAL,
 		TK_TYPECAST,
+		TK_SIZE_SPEC,  // 添加大小指示符类型
 		TK_UNKNOWN
 	};
 
@@ -1303,6 +1352,10 @@ std::string CEAssemblyEngine::ReplaceSymbols(const std::string& line) {
 			// 检查是否为寄存器
 			else if (isX64RegisterName(lowerWord)) {
 				token.type = TK_REGISTER;
+			}
+			// 添加：检查是否为大小指示符
+			else if (isSizeSpecifier(lowerWord)) {
+				token.type = TK_SIZE_SPEC;
 			}
 			else if (std::all_of(word.begin(), word.end(), ::isdigit)) {
 				// 在CE中，纯数字默认是十六进制
@@ -1646,7 +1699,12 @@ bool CEAssemblyEngine::ProcessUnregisterSymbol(const std::string& line) {
 		return false;
 	}
 
-	m_symbolManager->UnregisterSymbol(cmd.parameters[0]);
+	// 注销所有指定的符号
+	for (const auto& symbolName : cmd.parameters) {
+		m_symbolManager->UnregisterSymbol(symbolName);
+		LOG_DEBUG_F("Symbol '%s' unregistered", symbolName.c_str());
+	}
+
 	return true;
 }
 

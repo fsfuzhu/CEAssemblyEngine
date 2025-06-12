@@ -1,4 +1,4 @@
-// CEScriptParser.cpp - CE脚本解析器实现
+// CEScriptParser.cpp - CE脚本解析器实现（完整修复版）
 #include "Core/CEAssemblyEngine.h"
 #include "CEScriptParser.h"
 #include "Utils/DebugHelper.h"
@@ -106,22 +106,44 @@ ParsedCommand CEScriptParser::ParseLine(const std::string& line) {
         commandName.erase(0, commandName.find_first_not_of(" \t"));
         commandName.erase(commandName.find_last_not_of(" \t") + 1);
 
+        // 转换为小写用于比较
+        std::string lowerCommand = commandName;
+        std::transform(lowerCommand.begin(), lowerCommand.end(), lowerCommand.begin(), ::tolower);
+
         // 查找匹配的右括号
         size_t endParen = line.find(')', parenPos);
         if (endParen != std::string::npos) {
             // 提取括号内的参数
             std::string params = line.substr(parenPos + 1, endParen - parenPos - 1);
 
-            // 按逗号分割参数
-            std::istringstream paramStream(params);
-            std::string param;
+            // 特殊处理 label、registersymbol 和 unregistersymbol 命令 - 按空格分隔多个标签
+            if (lowerCommand == "label" || lowerCommand == "registersymbol" ||
+                lowerCommand == "unregistersymbol") {
+                // 按空格分隔多个标签
+                std::istringstream paramStream(params);
+                std::string param;
 
-            while (std::getline(paramStream, param, ',')) {
-                // 去除空白
-                param.erase(0, param.find_first_not_of(" \t"));
-                param.erase(param.find_last_not_of(" \t") + 1);
-                if (!param.empty()) {
-                    cmd.parameters.push_back(param);
+                while (paramStream >> param) {
+                    // 去除可能的逗号（支持两种格式）
+                    if (!param.empty() && param.back() == ',') {
+                        param.pop_back();
+                    }
+                    if (!param.empty()) {
+                        cmd.parameters.push_back(param);
+                    }
+                }
+            }
+            else {
+                // 其他命令按逗号分隔参数
+                std::istringstream paramStream(params);
+                std::string param;
+
+                while (std::getline(paramStream, param, ',')) {
+                    param.erase(0, param.find_first_not_of(" \t"));
+                    param.erase(param.find_last_not_of(" \t") + 1);
+                    if (!param.empty()) {
+                        cmd.parameters.push_back(param);
+                    }
                 }
             }
 
@@ -133,7 +155,7 @@ ParsedCommand CEScriptParser::ParseLine(const std::string& line) {
         }
     }
     else {
-        // 没有括号的命令，按空格分割
+        // 没有括号的命令，按空格分隔
         std::istringstream iss(line);
         std::string token;
         bool firstToken = true;

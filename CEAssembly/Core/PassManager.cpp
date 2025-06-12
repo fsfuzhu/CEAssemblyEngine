@@ -1,4 +1,4 @@
-// PassManager.cpp - 修复捕获变量处理的完整版本
+// PassManager.cpp - 修复版完整代码
 #include "PassManager.h"
 #include "Core/CEAssemblyEngine.h"
 #include "Symbol/SymbolManager.h"
@@ -14,6 +14,7 @@
 #include <regex>
 #include <unordered_set>
 bool isX64RegisterName(const std::string& token);
+
 // ==================== PassManager 实现 ====================
 
 PassManager::PassManager() {
@@ -118,7 +119,6 @@ void PassManager::GetStatistics(int& totalPasses, int& totalInstructions) const 
 }
 
 // ==================== PreprocessingPass 实现 ====================
-
 
 PassResult PreprocessingPass::Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) {
     PassResult result;
@@ -231,103 +231,119 @@ PassResult PreprocessingPass::Execute(std::vector<InstructionContext>& instructi
         "db", "dw", "dd", "dq", "dt", "do", "dy", "dz"
     };
 
+    // 处理匿名标签
+    int anonLabelCounter = 0;
+    std::map<size_t, std::string> labelMapping; // instruction index -> label name
+
+    // Phase 1: 替换 @@ 为唯一标签
+    for (size_t i = 0; i < instructions.size(); ++i) {
+        auto& ctx = instructions[i];
+
+        // 检查是否是匿名标签定义
+        if (ctx.originalLine == "@@:") {
+            std::string uniqueLabel = "__anon_" + std::to_string(anonLabelCounter++);
+            ctx.processedLine = uniqueLabel + ":";
+            ctx.isLabelDef = true;
+            ctx.labelName = uniqueLabel;
+            ctx.commandType = CommandType::ASSEMBLY;
+            labelMapping[i] = uniqueLabel;
+
+            LOG_DEBUG_F("Converted @@ to %s at line %zu", uniqueLabel.c_str(), i);
+            result.instructionsModified++;
+        }
+        // 检查普通标签（包括偏移标签）
+        else if (!ctx.originalLine.empty() && ctx.originalLine.back() == ':') {
+            ctx.isLabelDef = true;
+            ctx.labelName = ctx.originalLine.substr(0, ctx.originalLine.length() - 1);
+            ctx.commandType = CommandType::ASSEMBLY;
+
+            // 检测是否是偏移标签
+            size_t plusPos = ctx.labelName.find('+');
+            if (plusPos != std::string::npos) {
+                ctx.isOffsetLabel = true;
+                ctx.baseLabel = ctx.labelName.substr(0, plusPos);
+                ctx.offsetStr = ctx.labelName.substr(plusPos + 1);
+
+                // 标记需要符号解析
+                ctx.needsSymbolResolution = true;
+                ctx.unresolvedSymbols.push_back(ctx.baseLabel);
+
+                LOG_DEBUG_F("Detected offset label: %s = %s + %s",
+                    ctx.labelName.c_str(), ctx.baseLabel.c_str(), ctx.offsetStr.c_str());
+            }
+
+            labelMapping[i] = ctx.labelName;
+        }
+    }
+
+    // Phase 2: 替换 @f 和 @b
+    for (size_t i = 0; i < instructions.size(); ++i) {
+        auto& ctx = instructions[i];
+
+        if (ctx.processedLine.find("@f") != std::string::npos ||
+            ctx.processedLine.find("@b") != std::string::npos) {
+
+            std::string processed = ctx.processedLine;
+
+            // 替换 @f 为下一个标签
+            size_t pos = processed.find("@f");
+            while (pos != std::string::npos) {
+                std::string nextLabel;
+                for (size_t j = i + 1; j < instructions.size(); ++j) {
+                    if (labelMapping.find(j) != labelMapping.end()) {
+                        nextLabel = labelMapping[j];
+                        break;
+                    }
+                }
+
+                if (!nextLabel.empty()) {
+                    processed.replace(pos, 2, nextLabel);
+                    LOG_TRACE_F("Replaced @f with %s in: %s", nextLabel.c_str(), ctx.originalLine.c_str());
+                }
+                else {
+                    result.warnings.push_back("No forward label found for @f at: " + ctx.originalLine);
+                    processed.replace(pos, 2, "__no_forward_label");
+                }
+
+                pos = processed.find("@f", pos + 1);
+            }
+
+            // 替换 @b 为上一个标签
+            pos = processed.find("@b");
+            while (pos != std::string::npos) {
+                std::string prevLabel;
+                for (int j = i - 1; j >= 0; --j) {
+                    if (labelMapping.find(j) != labelMapping.end()) {
+                        prevLabel = labelMapping[j];
+                        break;
+                    }
+                }
+
+                if (!prevLabel.empty()) {
+                    processed.replace(pos, 2, prevLabel);
+                    LOG_TRACE_F("Replaced @b with %s in: %s", prevLabel.c_str(), ctx.originalLine.c_str());
+                }
+                else {
+                    result.warnings.push_back("No backward label found for @b at: " + ctx.originalLine);
+                    processed.replace(pos, 2, "__no_backward_label");
+                }
+
+                pos = processed.find("@b", pos + 1);
+            }
+
+            if (processed != ctx.processedLine) {
+                ctx.processedLine = processed;
+                result.instructionsModified++;
+            }
+        }
+    }
+
+    // 继续其他预处理
     for (auto& ctx : instructions) {
         result.instructionsProcessed++;
 
         if (ctx.originalLine.empty()) continue;
 
-        // 1. 检查是否是标签定义（以冒号结尾）
-        // First: Convert all @@ labels to unique names
-        int anonLabelCounter = 0;
-        std::map<size_t, std::string> labelMapping; // instruction index -> label name
-        // Phase 1: Replace @@ with unique labels
-        for (size_t i = 0; i < instructions.size(); ++i) {
-            auto& ctx = instructions[i];
-
-            // Check if it's an anonymous label definition
-            if (ctx.originalLine == "@@:") {
-                std::string uniqueLabel = "__anon_" + std::to_string(anonLabelCounter++);
-                ctx.processedLine = uniqueLabel + ":";
-                ctx.isLabelDef = true;
-                ctx.labelName = uniqueLabel;
-                ctx.commandType = CommandType::ASSEMBLY;
-                labelMapping[i] = uniqueLabel;
-
-                LOG_DEBUG_F("Converted @@ to %s at line %zu", uniqueLabel.c_str(), i);
-                result.instructionsModified++;
-            }
-            // Regular label
-            else if (!ctx.originalLine.empty() && ctx.originalLine.back() == ':') {
-                ctx.isLabelDef = true;
-                ctx.labelName = ctx.originalLine.substr(0, ctx.originalLine.length() - 1);
-                ctx.commandType = CommandType::ASSEMBLY;
-                labelMapping[i] = ctx.labelName;
-            }
-        }
-
-        // Phase 2: Replace @f and @b in instructions
-        for (size_t i = 0; i < instructions.size(); ++i) {
-            auto& ctx = instructions[i];
-
-            if (ctx.processedLine.find("@f") != std::string::npos ||
-                ctx.processedLine.find("@b") != std::string::npos) {
-
-                std::string processed = ctx.processedLine;
-
-                // Replace @f with next label
-                size_t pos = processed.find("@f");
-                while (pos != std::string::npos) {
-                    // Find next label
-                    std::string nextLabel;
-                    for (size_t j = i + 1; j < instructions.size(); ++j) {
-                        if (labelMapping.find(j) != labelMapping.end()) {
-                            nextLabel = labelMapping[j];
-                            break;
-                        }
-                    }
-
-                    if (!nextLabel.empty()) {
-                        processed.replace(pos, 2, nextLabel);
-                        LOG_TRACE_F("Replaced @f with %s in: %s", nextLabel.c_str(), ctx.originalLine.c_str());
-                    }
-                    else {
-                        result.warnings.push_back("No forward label found for @f at: " + ctx.originalLine);
-                        processed.replace(pos, 2, "__no_forward_label");
-                    }
-
-                    pos = processed.find("@f", pos + 1);
-                }
-
-                // Replace @b with previous label
-                pos = processed.find("@b");
-                while (pos != std::string::npos) {
-                    // Find previous label
-                    std::string prevLabel;
-                    for (int j = i - 1; j >= 0; --j) {
-                        if (labelMapping.find(j) != labelMapping.end()) {
-                            prevLabel = labelMapping[j];
-                            break;
-                        }
-                    }
-
-                    if (!prevLabel.empty()) {
-                        processed.replace(pos, 2, prevLabel);
-                        LOG_TRACE_F("Replaced @b with %s in: %s", prevLabel.c_str(), ctx.originalLine.c_str());
-                    }
-                    else {
-                        result.warnings.push_back("No backward label found for @b at: " + ctx.originalLine);
-                        processed.replace(pos, 2, "__no_backward_label");
-                    }
-
-                    pos = processed.find("@b", pos + 1);
-                }
-
-                if (processed != ctx.processedLine) {
-                    ctx.processedLine = processed;
-                    result.instructionsModified++;
-                }
-            }
-        }
         // 2. 处理 (float) 转换
         if (ctx.processedLine.find("(float)") != std::string::npos) {
             std::string processed = engine->ProcessFloatConversion(ctx.processedLine);
@@ -363,7 +379,7 @@ PassResult PreprocessingPass::Execute(std::vector<InstructionContext>& instructi
                     continue;
                 }
 
-                // 检查是否包含 @f 或 @b
+                // 检查是否包含 @f 或 @b（虽然应该已经被替换）
                 if (ctx.processedLine.find("@f") != std::string::npos ||
                     ctx.processedLine.find("@b") != std::string::npos) {
                     ctx.needsSymbolResolution = true;
@@ -561,8 +577,8 @@ PassResult SymbolCollectionPass::Execute(std::vector<InstructionContext>& instru
             break;
 
         case CommandType::LABEL:
-            if (!ctx.parameters.empty()) {
-                std::string labelName = ctx.parameters[0];
+            // 支持多标签声明
+            for (const auto& labelName : ctx.parameters) {
                 // 所有标签初始注册为地址0，后续pass会更新
                 symbolMgr->RegisterSymbol(labelName, 0, 0, true);
                 LOG_DEBUG_F("Label '%s' declared", labelName.c_str());
@@ -570,7 +586,17 @@ PassResult SymbolCollectionPass::Execute(std::vector<InstructionContext>& instru
             break;
 
         case CommandType::REGISTERSYMBOL:
-            // 这个在后面的 Pass 中处理
+            // 支持多符号注册
+            for (const auto& symbolName : ctx.parameters) {
+                // 获取符号当前地址
+                uintptr_t address = 0;
+                symbolMgr->GetSymbolAddress(symbolName, address);
+
+                // 标记为全局符号（保持现有地址）
+                symbolMgr->RegisterSymbol(symbolName, address, 0, true);
+                LOG_DEBUG_F("Symbol '%s' marked as global at 0x%llX",
+                    symbolName.c_str(), address);
+            }
             break;
 
         default:
@@ -621,9 +647,9 @@ PassResult TwoPassAssemblyPass::Execute(std::vector<InstructionContext>& instruc
         // 设置标签信息
         engine->SetAnonymousLabels(anonymousLabels);
 
-        // After first pass, before second pass
+        // 在第二遍之前，确保所有标签都在符号表中
         LOG_DEBUG("Registering all labels in symbol table");
-        auto symbolMgr = engine->GetSymbolManager();  // Get the symbol manager
+        auto symbolMgr = engine->GetSymbolManager();
         for (const auto& ctx : instructions) {
             if (ctx.isLabelDef && ctx.address != 0) {
                 symbolMgr->RegisterSymbol(ctx.labelName, ctx.address, 0, true);
@@ -679,35 +705,23 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
     uintptr_t currentAddress = 0;
     bool anyAddressChanged = false;
 
-    // First pass: process all labels to ensure they have addresses
+    // 第一轮：处理所有非偏移标签
     for (auto& ctx : instructions) {
         if (ctx.commandType != CommandType::ASSEMBLY) continue;
 
-        // Handle label definitions
-        if (ctx.isLabelDef) {
+        // 处理普通标签定义（非偏移）
+        if (ctx.isLabelDef && !ctx.isOffsetLabel) {
             uintptr_t newAddress = 0;
 
-            // Check if symbol already has an address (like newmem from alloc)
+            // 检查符号是否已有地址（如从 alloc 分配的 newmem）
             uintptr_t symbolAddr = 0;
             if (symbolMgr->GetSymbolAddress(ctx.labelName, symbolAddr) && symbolAddr != 0) {
                 newAddress = symbolAddr;
                 LOG_DEBUG_F("Label %s using allocated address: 0x%llX",
                     ctx.labelName.c_str(), newAddress);
             }
-            // Handle label+offset syntax
-            else if (ctx.labelName.find('+') != std::string::npos) {
-                size_t plusPos = ctx.labelName.find('+');
-                std::string baseName = ctx.labelName.substr(0, plusPos);
-                std::string offsetStr = ctx.labelName.substr(plusPos + 1);
 
-                uintptr_t baseAddr = 0;
-                if (symbolMgr->GetSymbolAddress(baseName, baseAddr) && baseAddr != 0) {
-                    size_t offset = std::stoull(offsetStr, nullptr, 16);
-                    newAddress = baseAddr + offset;
-                }
-            }
-
-            // Update address
+            // 更新地址
             if (newAddress != 0) {
                 if (ctx.address != newAddress) {
                     anyAddressChanged = true;
@@ -715,53 +729,123 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
                 }
                 currentAddress = newAddress;
 
-                // Update symbol table
+                // 更新符号表
                 symbolMgr->RegisterSymbol(ctx.labelName, newAddress, 0, true);
                 LOG_TRACE_F("Label %s at 0x%llX", ctx.labelName.c_str(), newAddress);
             }
         }
     }
 
-    // Second pass: process all instructions
-    currentAddress = 0;
+    // 第二轮：处理偏移标签（此时基础标签地址应该已确定）
     for (auto& ctx : instructions) {
         if (ctx.commandType != CommandType::ASSEMBLY) continue;
 
-        // For labels, use their established address
-        if (ctx.isLabelDef && ctx.address != 0) {
-            currentAddress = ctx.address;
+        if (ctx.isLabelDef && ctx.isOffsetLabel) {
+            uintptr_t baseAddr = 0;
+            if (symbolMgr->GetSymbolAddress(ctx.baseLabel, baseAddr) && baseAddr != 0) {
+                size_t offset = 0;
 
-            // Make sure the label is registered in the symbol table
-            symbolMgr->RegisterSymbol(ctx.labelName, currentAddress, 0, true);
+                // 解析偏移值（支持十进制和十六进制）
+                try {
+                    if (ctx.offsetStr.find("0x") == 0 || ctx.offsetStr.find("0X") == 0) {
+                        offset = std::stoull(ctx.offsetStr, nullptr, 16);
+                    }
+                    else if (ctx.offsetStr[0] == '$') {
+                        offset = std::stoull(ctx.offsetStr.substr(1), nullptr, 16);
+                    }
+                    else {
+                        // 默认为十六进制（CE风格）
+                        offset = std::stoull(ctx.offsetStr, nullptr, 16);
+                    }
+                }
+                catch (...) {
+                    LOG_ERROR_F("Invalid offset value: %s", ctx.offsetStr.c_str());
+                    warnings.push_back("Invalid offset in label: " + ctx.labelName);
+                    continue;
+                }
 
-            LOG_DEBUG_F("Setting current address to label %s: 0x%llX",
-                ctx.labelName.c_str(), currentAddress);
+                uintptr_t newAddress = baseAddr + offset;
+
+                if (ctx.address != newAddress) {
+                    anyAddressChanged = true;
+                    ctx.address = newAddress;
+                }
+
+                // 注册偏移标签
+                symbolMgr->RegisterSymbol(ctx.labelName, newAddress, 0, true);
+                LOG_DEBUG_F("Offset label %s = %s + 0x%zX = 0x%llX",
+                    ctx.labelName.c_str(), ctx.baseLabel.c_str(), offset, newAddress);
+            }
+            else {
+                warnings.push_back("Base symbol not found for offset label: " + ctx.labelName);
+                LOG_ERROR_F("Base symbol '%s' not found for offset label '%s'",
+                    ctx.baseLabel.c_str(), ctx.labelName.c_str());
+            }
+        }
+    }
+
+    // 第三轮：处理所有指令，计算大小
+    currentAddress = 0;
+    size_t instructionIndex = 0;
+
+    for (auto& ctx : instructions) {
+        if (ctx.commandType != CommandType::ASSEMBLY) continue;
+
+        // 对于标签，使用其确定的地址
+        if (ctx.isLabelDef) {
+            if (ctx.address != 0) {
+                currentAddress = ctx.address;
+                LOG_DEBUG_F("Setting current address to label %s: 0x%llX",
+                    ctx.labelName.c_str(), currentAddress);
+            }
+            else if (currentAddress != 0) {
+                // **重要修复：如果标签没有预定义地址，使用当前地址**
+                ctx.address = currentAddress;
+                symbolMgr->RegisterSymbol(ctx.labelName, currentAddress, 0, true);
+                LOG_DEBUG_F("Assigning current address to label %s: 0x%llX",
+                    ctx.labelName.c_str(), currentAddress);
+            }
+            // 标签本身不占用空间
             continue;
         }
 
-        // Skip if no current address
+        // 跳过没有当前地址的指令
         if (currentAddress == 0) {
             LOG_TRACE_F("Skipping instruction (no address): %s", ctx.originalLine.c_str());
             continue;
         }
 
-        // Assign address to instruction
+        // 分配地址给指令
         if (ctx.address != currentAddress) {
             anyAddressChanged = true;
             ctx.address = currentAddress;
         }
 
-        // Special instruction processing
+        // 特殊指令处理
         if (ProcessSpecialInstruction(ctx, engine)) {
             currentAddress += ctx.actualSize;
             ctx.sizeCalculated = true;
+            instructionIndex++;
             continue;
         }
 
-        // Prepare assembled instruction - DO NOT replace symbols yet for size estimation
-        std::string asmLine = engine->ReplaceSymbolsForEstimation(ctx.processedLine);
+        // 准备汇编的行
+        std::string asmLine = ctx.processedLine;
 
-        // Use Keystone to get instruction size
+        // 处理浮点转换
+        if (asmLine.find("(float)") != std::string::npos) {
+            asmLine = engine->ProcessFloatConversion(asmLine);
+        }
+
+        // **转换为RIP相对寻址**
+        asmLine = ConvertToRipRelative(asmLine, ctx);
+
+        // 设置指令索引
+        for (auto& ref : ctx.ripReferences) {
+            ref.instructionIndex = instructionIndex;
+        }
+
+        // 使用 Keystone 获取指令大小
         unsigned char* encode = nullptr;
         size_t size = 0;
         size_t count = 0;
@@ -772,11 +856,36 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
                 ctx.actualSize = size;
             }
             ctx.sizeCalculated = true;
+
+            // 如果使用了RIP占位符，保存临时机器码
+            if (ctx.usedRipPlaceholder) {
+                ctx.machineCode.assign(encode, encode + size);
+            }
+
             ks_free(encode);
+
+            LOG_TRACE_F("Instruction at 0x%llX: '%s' size = %zu bytes",
+                ctx.address, ctx.originalLine.c_str(), size);
         }
         else {
-            // Use conservative estimate
+            // 汇编失败
+            ks_err err = ks_errno(ksEngine);
+            LOG_ERROR_F("Failed to assemble for size: %s (error: %s)", asmLine.c_str(), ks_strerror(err));
+            warnings.push_back("Size calculation failed for: " + ctx.originalLine);
+
+            // 使用保守估计
             size_t estimatedSize = 8;
+
+            // 特殊处理一些常见指令
+            std::istringstream iss(ctx.processedLine);
+            std::string opcode;
+            iss >> opcode;
+            std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+
+            if (opcode == "push" || opcode == "pop") estimatedSize = 1;
+            else if (opcode == "je" || opcode == "jne" || opcode == "jg" || opcode == "jl") estimatedSize = 2;
+            else if (opcode == "jmp" || opcode == "call") estimatedSize = 5;
+
             if (ctx.actualSize != estimatedSize) {
                 anyAddressChanged = true;
                 ctx.actualSize = estimatedSize;
@@ -784,9 +893,109 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
         }
 
         currentAddress += ctx.actualSize;
+        instructionIndex++;
+    }
+
+    // 第四轮：确保所有匿名标签都已分配地址
+    for (auto& ctx : instructions) {
+        if (ctx.isLabelDef && ctx.labelName.find("__anon_") == 0) {
+            if (ctx.address != 0) {
+                symbolMgr->RegisterSymbol(ctx.labelName, ctx.address, 0, true);
+                LOG_DEBUG_F("Registering anonymous label %s at 0x%llX",
+                    ctx.labelName.c_str(), ctx.address);
+            }
+        }
     }
 
     return anyAddressChanged;
+}
+
+bool TwoPassAssemblyPass::FixRipOffsets(InstructionContext& ctx, CEAssemblyEngine* engine) {
+    if (!ctx.usedRipPlaceholder || ctx.ripReferences.empty()) {
+        return true;
+    }
+
+    auto symbolMgr = engine->GetSymbolManager();
+
+    // 对每个RIP引用
+    for (auto& ref : ctx.ripReferences) {
+        // 获取目标符号地址
+        uintptr_t targetAddr = 0;
+        if (!symbolMgr->GetSymbolAddress(ref.symbolName, targetAddr) || targetAddr == 0) {
+            LOG_ERROR_F("Cannot resolve symbol for RIP fixup: %s", ref.symbolName.c_str());
+            return false;
+        }
+
+        // 计算RIP相对偏移
+        // RIP在指令执行时指向下一条指令
+        uintptr_t ripAddr = ctx.address + ctx.actualSize;
+        int32_t ripOffset = static_cast<int32_t>(targetAddr - ripAddr);
+
+        // 在机器码中查找 RIP+0 模式并修正
+        bool found = false;
+
+        // x64指令中，RIP相对寻址通常编码为：
+        // ModR/M byte with Mod=00, R/M=101 (0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D等)
+        // 后跟4字节偏移
+
+        for (size_t i = 0; i < ctx.machineCode.size() - 4; i++) {
+            uint8_t modrm = ctx.machineCode[i];
+
+            // 检查是否是RIP相对寻址的ModR/M字节
+            if ((modrm & 0xC7) == 0x05) { // Mod=00, R/M=101
+                // 检查后面4字节是否全为0（我们的占位符）
+                bool isZero = true;
+                for (size_t j = 1; j <= 4 && i + j < ctx.machineCode.size(); j++) {
+                    if (ctx.machineCode[i + j] != 0x00) {
+                        isZero = false;
+                        break;
+                    }
+                }
+
+                if (isZero) {
+                    // 写入计算出的偏移
+                    *reinterpret_cast<int32_t*>(&ctx.machineCode[i + 1]) = ripOffset;
+                    found = true;
+
+                    LOG_DEBUG_F("Fixed RIP offset for %s: 0x%X (target: 0x%llX, rip: 0x%llX)",
+                        ref.symbolName.c_str(), ripOffset, targetAddr, ripAddr);
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            // 尝试更宽松的搜索：查找任何4字节的0序列
+            for (size_t i = 0; i <= ctx.machineCode.size() - 4; i++) {
+                if (ctx.machineCode[i] == 0x00 &&
+                    ctx.machineCode[i + 1] == 0x00 &&
+                    ctx.machineCode[i + 2] == 0x00 &&
+                    ctx.machineCode[i + 3] == 0x00) {
+
+                    // 检查前一个字节是否可能是ModR/M字节
+                    if (i > 0) {
+                        uint8_t prevByte = ctx.machineCode[i - 1];
+                        // 简单检查：是否可能是涉及RIP的指令
+                        if ((prevByte & 0xC0) == 0x00 || (prevByte & 0xC0) == 0x40 || (prevByte & 0xC0) == 0x80) {
+                            *reinterpret_cast<int32_t*>(&ctx.machineCode[i]) = ripOffset;
+                            found = true;
+
+                            LOG_DEBUG_F("Fixed RIP offset (loose match) for %s: 0x%X",
+                                ref.symbolName.c_str(), ripOffset);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!found) {
+            LOG_ERROR_F("Failed to find RIP+0 pattern in instruction: %s", ctx.originalLine.c_str());
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& instructions,
@@ -805,19 +1014,30 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
         LOG_DEBUG_F("Processing instruction at 0x%llX: %s",
             ctx.address, ctx.originalLine.c_str());
 
-        // If already has machine code, skip
+        // 如果已经有机器码（使用了RIP占位符）
+        if (!ctx.machineCode.empty() && ctx.usedRipPlaceholder) {
+            // 修正RIP偏移
+            if (!FixRipOffsets(ctx, engine)) {
+                warnings.push_back("Failed to fix RIP offsets for: " + ctx.originalLine);
+                return false;
+            }
+            ctx.assembled = true;
+            continue;
+        }
+
+        // 如果已经汇编过，跳过
         if (!ctx.machineCode.empty()) {
             ctx.assembled = true;
             continue;
         }
 
-        // Special instruction processing
+        // 特殊指令处理
         if (ProcessSpecialInstruction(ctx, engine)) {
             ctx.assembled = true;
             continue;
         }
 
-        // Process @f/@b jumps
+        // 处理 @f/@b 跳转
         if (ctx.processedLine.find("@f") != std::string::npos ||
             ctx.processedLine.find("@b") != std::string::npos) {
             if (engine->ProcessCESpecialJump(ctx.processedLine, ctx.address, ctx.machineCode)) {
@@ -826,7 +1046,7 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
             }
         }
 
-        // 新增：特殊处理包含符号的jmp/call指令
+        // 新增：特殊处理jmp/call指令
         std::istringstream iss(ctx.processedLine);
         std::string opcode;
         iss >> opcode;
@@ -851,8 +1071,22 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
             }
         }
 
-        // Normal assembly - NOW we replace symbols with actual values
-        std::string asmLine = engine->ReplaceSymbols(ctx.processedLine);
+        // 正常汇编流程
+        std::string asmLine = ctx.processedLine;
+
+        // 处理浮点转换
+        if (asmLine.find("(float)") != std::string::npos) {
+            asmLine = engine->ProcessFloatConversion(asmLine);
+        }
+
+        // 转换为RIP相对寻址（如果还没转换）
+        if (!ctx.usedRipPlaceholder) {
+            asmLine = ConvertToRipRelative(asmLine, ctx);
+        }
+
+        // 替换其他符号
+        asmLine = engine->ReplaceSymbols(asmLine);
+
         LOG_DEBUG_F("Assembling at 0x%llX: '%s' -> '%s'",
             ctx.address, ctx.processedLine.c_str(), asmLine.c_str());
 
@@ -862,8 +1096,17 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
 
         if (ks_asm(ksEngine, asmLine.c_str(), ctx.address, &encode, &size, &count) == KS_ERR_OK) {
             ctx.machineCode.assign(encode, encode + size);
-            ctx.assembled = true;
             ks_free(encode);
+
+            // 如果使用了RIP占位符，修正偏移
+            if (ctx.usedRipPlaceholder) {
+                if (!FixRipOffsets(ctx, engine)) {
+                    warnings.push_back("Failed to fix RIP offsets for: " + ctx.originalLine);
+                    return false;
+                }
+            }
+
+            ctx.assembled = true;
         }
         else {
             ks_err err = ks_errno(ksEngine);
@@ -910,6 +1153,96 @@ bool TwoPassAssemblyPass::ProcessSpecialInstruction(InstructionContext& ctx, CEA
 
     return false;
 }
+std::string TwoPassAssemblyPass::ConvertToRipRelative(const std::string& line, InstructionContext& ctx) {
+    // 解析指令
+    std::istringstream iss(line);
+    std::string opcode;
+    iss >> opcode;
+    std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+
+    // 特殊处理不需要转换的指令
+    if (opcode == "nop" || opcode == "ret" || opcode == "retn" ||
+        opcode == "push" || opcode == "pop") {
+        return line;
+    }
+
+    // 数据定义指令不需要转换
+    if (opcode == "db" || opcode == "dw" || opcode == "dd" || opcode == "dq") {
+        return line;
+    }
+
+    // 跳转指令不需要RIP转换（它们有自己的相对寻址）
+    if (opcode == "jmp" || opcode == "call" || opcode == "je" || opcode == "jne" ||
+        opcode == "jg" || opcode == "jl" || opcode == "jge" || opcode == "jle") {
+        return line;
+    }
+
+    std::string result = line;
+
+    // 查找内存操作数 [symbol]
+    size_t bracketStart = result.find('[');
+    while (bracketStart != std::string::npos) {
+        size_t bracketEnd = result.find(']', bracketStart);
+        if (bracketEnd == std::string::npos) break;
+
+        std::string memOperand = result.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+
+        // 去除空格
+        memOperand.erase(std::remove_if(memOperand.begin(), memOperand.end(), ::isspace), memOperand.end());
+
+        // 检查是否已经是RIP相对寻址
+        if (memOperand.find("rip") != std::string::npos) {
+            bracketStart = result.find('[', bracketEnd);
+            continue;
+        }
+
+        // 检查是否是纯符号（不是寄存器，不包含+/-等复杂表达式）
+        bool isPureSymbol = true;
+
+        // 检查是否包含寄存器
+        if (isX64RegisterName(memOperand)) {
+            isPureSymbol = false;
+        }
+
+        // 检查是否是复杂表达式（但允许简单的偏移如rdx-0C）
+        if (memOperand.find('+') != std::string::npos ||
+            memOperand.find('*') != std::string::npos) {
+            isPureSymbol = false;
+        }
+
+        // 特殊处理 reg-offset 格式（如 rdx-0C）
+        if (memOperand.find('-') != std::string::npos) {
+            // 检查是否是 寄存器-偏移 格式
+            size_t minusPos = memOperand.find('-');
+            std::string beforeMinus = memOperand.substr(0, minusPos);
+            if (isX64RegisterName(beforeMinus)) {
+                isPureSymbol = false;
+            }
+        }
+
+        if (isPureSymbol && !memOperand.empty()) {
+            // 记录RIP引用
+            RipReference ref;
+            ref.instructionIndex = 0; // 将在后面设置
+            ref.symbolName = memOperand;
+            ref.ripOffsetPosition = 0; // 将在汇编后确定
+            ref.is32bit = true; // x64默认使用32位RIP偏移
+
+            ctx.ripReferences.push_back(ref);
+            ctx.usedRipPlaceholder = true;
+
+            // 替换为 [rip+0]
+            result = result.substr(0, bracketStart + 1) + "rip+0" + result.substr(bracketEnd);
+
+            LOG_DEBUG_F("Converted [%s] to [rip+0] in: %s", memOperand.c_str(), line.c_str());
+        }
+
+        // 查找下一个
+        bracketStart = result.find('[', bracketEnd);
+    }
+
+    return result;
+}
 
 size_t TwoPassAssemblyPass::CalculateDataSize(const std::string& line) {
     std::istringstream iss(line);
@@ -934,7 +1267,6 @@ size_t TwoPassAssemblyPass::CalculateDataSize(const std::string& line) {
 }
 
 // ==================== CodeEmissionPass 实现 ====================
-// 完整的代码写入 Pass 实现
 
 PassResult CodeEmissionPass::Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) {
     PassResult result;

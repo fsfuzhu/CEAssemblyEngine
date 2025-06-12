@@ -1,4 +1,4 @@
-// PassManager.h - 多遍处理管理器
+// PassManager.h - 多遍处理管理器（完整修改版）
 #pragma once
 #include <string>
 #include <vector>
@@ -12,6 +12,14 @@ class SymbolManager;
 class MemoryManager;
 class PatternScanner;
 enum class CommandType;
+
+// RIP引用信息
+struct RipReference {
+    size_t instructionIndex;     // 指令索引
+    std::string symbolName;      // 引用的符号名
+    size_t ripOffsetPosition;    // RIP偏移在机器码中的位置
+    bool is32bit;                // 是否是32位偏移（true）还是8位（false）
+};
 
 // 指令的中间表示
 struct InstructionContext {
@@ -30,13 +38,22 @@ struct InstructionContext {
     bool isLabelDef = false;        // 是否是标签定义
     std::string labelName;          // 标签名称
 
+    // 偏移标签相关
+    bool isOffsetLabel = false;     // 是否是偏移标签（如 newmem+200）
+    std::string baseLabel;          // 基础标签名（如 "newmem"）
+    std::string offsetStr;          // 偏移字符串（如 "200"）
+
     // 状态标记
     bool needsSymbolResolution = false;   // 需要符号解析
     bool sizeCalculated = false;          // 大小已计算
     bool assembled = false;               // 已汇编
+    bool usedRipPlaceholder = false;      // 使用了RIP占位符
 
     // 符号依赖
     std::vector<std::string> unresolvedSymbols;  // 未解析的符号
+
+    // RIP引用
+    std::vector<RipReference> ripReferences;     // RIP引用列表
 };
 
 // Pass 执行结果
@@ -88,12 +105,12 @@ public:
     bool RequiresIteration() const override { return true; }
 
 private:
-    // 第一遍：计算大小和分配地址
+    // 第一遍：计算大小和分配地址（使用RIP占位符）
     bool CalculateSizesAndAddresses(std::vector<InstructionContext>& instructions,
         CEAssemblyEngine* engine,
         std::vector<std::string>& warnings);
 
-    // 第二遍：生成机器码
+    // 第二遍：生成机器码（修正RIP偏移）
     bool GenerateMachineCode(std::vector<InstructionContext>& instructions,
         CEAssemblyEngine* engine,
         std::vector<std::string>& warnings);
@@ -101,6 +118,12 @@ private:
     // 辅助方法
     bool ProcessSpecialInstruction(InstructionContext& ctx, CEAssemblyEngine* engine);
     size_t CalculateDataSize(const std::string& line);
+
+    // 新增：将符号替换为RIP相对寻址
+    std::string ConvertToRipRelative(const std::string& line, InstructionContext& ctx);
+
+    // 新增：修正RIP偏移
+    bool FixRipOffsets(InstructionContext& ctx, CEAssemblyEngine* engine);
 };
 
 // Pass 4: 代码写入
