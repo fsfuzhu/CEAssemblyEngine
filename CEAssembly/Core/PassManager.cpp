@@ -1,4 +1,4 @@
-// PassManager.cpp - 修复版完整代码
+// PassManager.cpp
 #include "PassManager.h"
 #include "Core/CEAssemblyEngine.h"
 #include "Symbol/SymbolManager.h"
@@ -13,10 +13,202 @@
 #include <map>
 #include <regex>
 #include <unordered_set>
-bool isX64RegisterName(const std::string& token);
 
-// ==================== PassManager 实现 ====================
+// 辅助函数实现
+bool isX64RegisterName(const std::string& token) {
+    // 转换为小写进行比较
+    std::string lower = token;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
+    // 使用正则表达式进行更精确的匹配
+    static const std::regex regPattern(
+        R"(^()"
+        // 64位通用寄存器
+        R"(r(ax|bx|cx|dx|si|di|bp|sp|8|9|1[0-5])|)"
+        // 32位通用寄存器
+        R"(e(ax|bx|cx|dx|si|di|bp|sp)|r(8|9|1[0-5])d|)"
+        // 16位通用寄存器
+        R"((ax|bx|cx|dx|si|di|bp|sp)|r(8|9|1[0-5])w|)"
+        // 8位通用寄存器
+        R"([abcd][hl]|(si|di|bp|sp)l|r(8|9|1[0-5])b|)"
+        // 段寄存器
+        R"([cdefgs]s|)"
+        // 控制和调试寄存器
+        R"(cr[0234]|cr8|dr[0-7]|)"
+        // MMX寄存器
+        R"(mm[0-7]|)"
+        // XMM寄存器 (SSE)
+        R"(xmm(1[0-5]|[0-9])|)"
+        // YMM寄存器 (AVX)
+        R"(ymm(1[0-5]|[0-9])|)"
+        // ZMM寄存器 (AVX-512)
+        R"(zmm(3[01]|[12][0-9]|[0-9])|)"
+        // FPU寄存器
+        R"(st[0-7]?|)"
+        // 特殊寄存器
+        R"(rip|eip|ip|rflags|eflags|flags)"
+        R"()$)",
+        std::regex::icase | std::regex::optimize
+    );
+
+    return std::regex_match(lower, regPattern);
+}
+bool isX64Mnemonic(const std::string& token) {
+    static const std::unordered_set<std::string> mnemonics = {
+        // 数据传输指令
+        "mov", "movabs", "movsx", "movsxd", "movzx", "lea", "xchg",
+        "push", "pop", "pushf", "popf", "pushfd", "popfd", "pushfq", "popfq",
+        "pusha", "popa", "pushad", "popad",
+        "xlatb", "bswap", "cmpxchg", "cmpxchg8b", "cmpxchg16b",
+
+        // 算术指令
+        "add", "adc", "sub", "sbb", "imul", "mul", "idiv", "div",
+        "inc", "dec", "neg", "cmp", "daa", "das", "aaa", "aas", "aam", "aad",
+
+        // 逻辑指令
+        "and", "or", "xor", "not", "test",
+
+        // 移位和旋转指令
+        "sal", "sar", "shl", "shr", "shld", "shrd",
+        "rol", "ror", "rcl", "rcr",
+
+        // 位操作指令
+        "bt", "btc", "btr", "bts", "bsf", "bsr", "popcnt", "lzcnt", "tzcnt",
+
+        // 控制转移指令
+        "jmp", "jmpf", "ljmp",
+        "ja", "jae", "jb", "jbe", "jc", "je", "jg", "jge", "jl", "jle",
+        "jna", "jnae", "jnb", "jnbe", "jnc", "jne", "jng", "jnge", "jnl", "jnle",
+        "jno", "jnp", "jns", "jnz", "jo", "jp", "jpe", "jpo", "js", "jz",
+        "jcxz", "jecxz", "jrcxz",
+        "loop", "loope", "loopz", "loopne", "loopnz",
+        "call", "ret", "retn", "retf", "iret", "iretd", "iretq",
+        "int", "int3", "into", "bound",
+        "enter", "leave",
+
+        // 字符串指令
+        "movs", "movsb", "movsw", "movsd", "movsq",
+        "cmps", "cmpsb", "cmpsw", "cmpsd", "cmpsq",
+        "scas", "scasb", "scasw", "scasd", "scasq",
+        "lods", "lodsb", "lodsw", "lodsd", "lodsq",
+        "stos", "stosb", "stosw", "stosd", "stosq",
+        "rep", "repe", "repz", "repne", "repnz",
+
+        // 标志控制指令
+        "stc", "clc", "cmc", "std", "cld", "sti", "cli",
+        "lahf", "sahf", "pushf", "popf",
+
+        // 杂项指令
+        "nop", "ud2", "cpuid", "rdtsc", "rdtscp", "rdpmc",
+        "wbinvd", "invd", "invlpg", "invpcid",
+        "hlt", "wait", "fwait", "pause", "mfence", "sfence", "lfence",
+        "prefetch", "prefetchw", "prefetcht0", "prefetcht1", "prefetcht2", "prefetchnta",
+        "clflush", "clflushopt", "clwb",
+
+        // x87 FPU 指令
+        "fld", "fst", "fstp", "fild", "fist", "fistp", "fbld", "fbstp",
+        "fxch", "fcmove", "fcmovne", "fcmovb", "fcmovbe", "fcmovnb", "fcmovnbe", "fcmovu", "fcmovnu",
+        "fadd", "faddp", "fiadd", "fsub", "fsubp", "fisub", "fsubr", "fsubrp", "fisubr",
+        "fmul", "fmulp", "fimul", "fdiv", "fdivp", "fidiv", "fdivr", "fdivrp", "fidivr",
+        "fprem", "fprem1", "fabs", "fchs", "frndint", "fscale", "fsqrt", "fxtract",
+        "fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp", "ficom", "ficomp", "fcomi", "fucomi", "fcomip", "fucomip",
+        "fsin", "fcos", "fsincos", "fptan", "fpatan", "f2xm1", "fyl2x", "fyl2xp1",
+        "finit", "fninit", "fclex", "fnclex", "fstcw", "fnstcw", "fldcw", "fstenv", "fnstenv", "fldenv", "fsave", "fnsave", "frstor",
+        "ffree", "fdecstp", "fincstp", "fstsw", "fnstsw", "fxsave", "fxrstor",
+
+        // MMX 指令
+        "emms", "movd", "movq",
+        "packsswb", "packssdw", "packuswb", "punpckhbw", "punpckhwd", "punpckhdq", "punpcklbw", "punpcklwd", "punpckldq",
+        "paddb", "paddw", "paddd", "paddsb", "paddsw", "paddusb", "paddusw",
+        "psubb", "psubw", "psubd", "psubsb", "psubsw", "psubusb", "psubusw",
+        "pmulhw", "pmullw", "pmaddwd",
+        "pcmpeqb", "pcmpeqw", "pcmpeqd", "pcmpgtb", "pcmpgtw", "pcmpgtd",
+        "pand", "pandn", "por", "pxor",
+        "psllw", "pslld", "psllq", "psrlw", "psrld", "psrlq", "psraw", "psrad",
+
+        // SSE/SSE2/SSE3/SSSE3/SSE4 指令
+        "movaps", "movups", "movapd", "movupd", "movdqa", "movdqu", "movss", "movsd", "movlps", "movhps", "movlpd", "movhpd",
+        "movmskps", "movmskpd", "movntps", "movntpd", "movnti", "movntdq",
+        "addps", "addpd", "addss", "addsd", "subps", "subpd", "subss", "subsd",
+        "mulps", "mulpd", "mulss", "mulsd", "divps", "divpd", "divss", "divsd",
+        "sqrtps", "sqrtpd", "sqrtss", "sqrtsd", "rsqrtps", "rsqrtss", "rcpps", "rcpss",
+        "maxps", "maxpd", "maxss", "maxsd", "minps", "minpd", "minss", "minsd",
+        "cmpps", "cmppd", "cmpss", "cmpsd", "comiss", "comisd", "ucomiss", "ucomisd",
+        "andps", "andpd", "andnps", "andnpd", "orps", "orpd", "xorps", "xorpd",
+        "shufps", "shufpd", "unpckhps", "unpckhpd", "unpcklps", "unpcklpd",
+        "cvtps2pd", "cvtpd2ps", "cvtps2dq", "cvtdq2ps", "cvttps2dq", "cvtpd2dq", "cvttpd2dq", "cvtdq2pd",
+        "cvtps2pi", "cvtpd2pi", "cvttps2pi", "cvttpd2pi", "cvtpi2ps", "cvtpi2pd",
+        "cvtss2si", "cvtsd2si", "cvttss2si", "cvttsd2si", "cvtsi2ss", "cvtsi2sd",
+        "maskmovq", "maskmovdqu", "pmovmskb", "pextrw", "pinsrw",
+        "pshufw", "pshufd", "pshufhw", "pshuflw",
+        "ldmxcsr", "stmxcsr",
+
+        // AVX/AVX2 指令 (v前缀版本)
+        "vaddps", "vaddpd", "vaddss", "vaddsd", "vsubps", "vsubpd", "vsubss", "vsubsd",
+        "vmulps", "vmulpd", "vmulss", "vmulsd", "vdivps", "vdivpd", "vdivss", "vdivsd",
+        "vsqrtps", "vsqrtpd", "vsqrtss", "vsqrtsd",
+        "vmovaps", "vmovups", "vmovapd", "vmovupd", "vmovss", "vmovsd", "vmovdqa", "vmovdqu",
+        "vxorps", "vxorpd", "vandps", "vandpd", "vorps", "vorpd",
+        "vcmpps", "vcmppd", "vcmpss", "vcmpsd",
+        "vshufps", "vshufpd", "vperm2f128", "vbroadcastss", "vbroadcastsd",
+
+        // 系统指令
+        "lgdt", "sgdt", "lidt", "sidt", "lldt", "sldt", "ltr", "str",
+        "lmsw", "smsw", "clts", "arpl", "lar", "lsl", "verr", "verw",
+        "invlpg", "invpcid", "wbinvd", "invd",
+        "mov", // mov to/from control/debug registers
+        "lfs", "lgs", "lss",
+        "syscall", "sysret", "sysenter", "sysexit",
+        "rdmsr", "wrmsr", "rdpmc", "rdtsc", "rdtscp",
+        "xsave", "xsavec", "xsaveopt", "xsaves", "xrstor", "xrstors",
+        "xgetbv", "xsetbv",
+
+        // 虚拟化指令
+        "vmcall", "vmlaunch", "vmresume", "vmxoff", "vmxon",
+        "invept", "invvpid", "vmfunc",
+        "vmclear", "vmptrld", "vmptrst", "vmread", "vmwrite",
+
+        // 其他扩展指令
+        "crc32", "popcnt", "lzcnt", "tzcnt", "bextr", "blsi", "blsmsk", "blsr",
+        "bzhi", "mulx", "pdep", "pext", "rorx", "sarx", "shlx", "shrx",
+        "adcx", "adox", "clac", "stac",
+        "xabort", "xacquire", "xbegin", "xend", "xrelease", "xtest",
+
+        // 加密指令
+        "aesenc", "aesenclast", "aesdec", "aesdeclast", "aesimc", "aeskeygenassist",
+        "pclmulqdq", "sha1msg1", "sha1msg2", "sha1nexte", "sha1rnds4",
+        "sha256msg1", "sha256msg2", "sha256rnds2"
+    };
+
+    std::string lower = token;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    return mnemonics.find(lower) != mnemonics.end();
+}
+bool isSizeSpecifier(const std::string& token) {
+    static const std::unordered_set<std::string> sizeSpecs = {
+        "byte", "word", "dword", "qword", "tbyte", "oword", "xmmword", "ymmword", "zmmword",
+        "ptr", "near", "far", "short"
+    };
+
+    std::string lower = token;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    return sizeSpecs.find(lower) != sizeSpecs.end();
+}
+bool isDataDirective(const std::string& token) {
+    static const std::unordered_set<std::string> dataDirectives = {
+        "db", "dw", "dd", "dq", "dt", "do", "dy", "dz",
+        "byte", "word", "dword", "qword", "tbyte", "real4", "real8", "real10"
+    };
+
+    std::string lower = token;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    return dataDirectives.find(lower) != dataDirectives.end();
+}
+
+// PassManager 实现
 PassManager::PassManager() {
     // 使用新的两遍汇编策略
     AddPass(std::make_unique<PreprocessingPass>());
@@ -24,13 +216,10 @@ PassManager::PassManager() {
     AddPass(std::make_unique<TwoPassAssemblyPass>());
     AddPass(std::make_unique<CodeEmissionPass>());
 }
-
 PassManager::~PassManager() = default;
-
 void PassManager::AddPass(std::unique_ptr<ProcessingPass> pass) {
     m_passes.push_back(std::move(pass));
 }
-
 bool PassManager::RunAllPasses(const std::vector<std::string>& lines, CEAssemblyEngine* engine) {
     LOG_INFO("=== Starting Multi-Pass Processing ===");
 
@@ -86,7 +275,6 @@ bool PassManager::RunAllPasses(const std::vector<std::string>& lines, CEAssembly
     LOG_INFO("=== Multi-Pass Processing Completed ===");
     return true;
 }
-
 void PassManager::ConvertLinesToInstructions(const std::vector<std::string>& lines) {
     m_instructions.clear();
     m_instructions.reserve(lines.size());
@@ -112,14 +300,12 @@ void PassManager::ConvertLinesToInstructions(const std::vector<std::string>& lin
         m_instructions.push_back(ctx);
     }
 }
-
 void PassManager::GetStatistics(int& totalPasses, int& totalInstructions) const {
     totalPasses = static_cast<int>(m_passes.size());
     totalInstructions = static_cast<int>(m_instructions.size());
 }
 
-// ==================== PreprocessingPass 实现 ====================
-
+// PreprocessingPass 实现
 PassResult PreprocessingPass::Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) {
     PassResult result;
     result.success = true;
@@ -487,8 +673,7 @@ PassResult PreprocessingPass::Execute(std::vector<InstructionContext>& instructi
     return result;
 }
 
-// ==================== SymbolCollectionPass 实现 ====================
-
+// SymbolCollectionPass 实现
 PassResult SymbolCollectionPass::Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) {
     PassResult result;
     result.success = true;
@@ -607,8 +792,7 @@ PassResult SymbolCollectionPass::Execute(std::vector<InstructionContext>& instru
     return result;
 }
 
-// ==================== TwoPassAssemblyPass 实现 ====================
-
+// TwoPassAssemblyPass 实现
 PassResult TwoPassAssemblyPass::Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) {
     PassResult result;
     result.success = true;
@@ -690,64 +874,8 @@ PassResult TwoPassAssemblyPass::Execute(std::vector<InstructionContext>& instruc
 
     return result;
 }
-// 在 CalculateSizesAndAddresses 函数中，在处理浮点转换之后添加这个函数
-std::string PrepareCEStyleHex(const std::string& line) {
-    std::string result = line;
-
-    // 查找方括号内的内容
-    size_t bracketStart = result.find('[');
-    while (bracketStart != std::string::npos) {
-        size_t bracketEnd = result.find(']', bracketStart);
-        if (bracketEnd == std::string::npos) break;
-
-        std::string content = result.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
-        std::string newContent = content;
-
-        // 查找 + 或 - 符号
-        size_t opPos = content.find('+');
-        bool isPlus = true;
-        if (opPos == std::string::npos) {
-            opPos = content.find('-');
-            isPlus = false;
-        }
-
-        if (opPos != std::string::npos) {
-            std::string regPart = content.substr(0, opPos);
-            std::string offsetPart = content.substr(opPos + 1);
-
-            // 去除空格
-            regPart.erase(std::remove_if(regPart.begin(), regPart.end(), ::isspace), regPart.end());
-            offsetPart.erase(std::remove_if(offsetPart.begin(), offsetPart.end(), ::isspace), offsetPart.end());
-
-            // 如果是寄存器+偏移的格式
-            if (isX64RegisterName(regPart)) {
-                // 检查偏移是否需要添加 0x 前缀
-                if (!offsetPart.empty() &&
-                    offsetPart.find("0x") != 0 &&
-                    offsetPart.find("0X") != 0 &&
-                    offsetPart[0] != '$' &&
-                    std::all_of(offsetPart.begin(), offsetPart.end(), ::isxdigit)) {
-                    // CE 风格的十六进制数，添加 0x 前缀
-                    newContent = regPart + (isPlus ? "+0x" : "-0x") + offsetPart;
-                    result = result.substr(0, bracketStart + 1) + newContent + result.substr(bracketEnd);
-
-                    LOG_DEBUG_F("Fixed CE-style hex: [%s] -> [%s]", content.c_str(), newContent.c_str());
-
-                    // 更新搜索位置
-                    bracketEnd = bracketStart + 1 + newContent.length();
-                }
-            }
-        }
-
-        // 查找下一个方括号
-        bracketStart = result.find('[', bracketEnd);
-    }
-
-    return result;
-}
 bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionContext>& instructions,
-    CEAssemblyEngine* engine,
-    std::vector<std::string>& warnings) {
+    CEAssemblyEngine* engine, std::vector<std::string>& warnings) {
     auto symbolMgr = engine->GetSymbolManager();
     auto ksEngine = engine->GetKeystoneEngine();
 
@@ -891,6 +1019,39 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
             asmLine = engine->ProcessFloatConversion(asmLine);
         }
         asmLine = PrepareCEStyleHex(asmLine);
+
+        // 额外处理：确保方括号内的纯数字有0x前缀
+        size_t bracketStart = asmLine.find('[');
+        while (bracketStart != std::string::npos) {
+            size_t bracketEnd = asmLine.find(']', bracketStart);
+            if (bracketEnd == std::string::npos) break;
+
+            std::string content = asmLine.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+
+            // 查找 + 或 - 后面的偏移量
+            size_t opPos = content.find_last_of("+-");
+            if (opPos != std::string::npos) {
+                std::string offsetPart = content.substr(opPos + 1);
+                offsetPart.erase(0, offsetPart.find_first_not_of(" \t"));
+                offsetPart.erase(offsetPart.find_last_not_of(" \t") + 1);
+
+                // 如果是纯数字且没有0x前缀，添加它
+                if (!offsetPart.empty() &&
+                    offsetPart.find("0x") != 0 &&
+                    offsetPart.find("0X") != 0 &&
+                    std::all_of(offsetPart.begin(), offsetPart.end(), ::isxdigit)) {
+
+                    std::string newContent = content.substr(0, opPos + 1) + "0x" + offsetPart;
+                    asmLine = asmLine.substr(0, bracketStart + 1) + newContent + asmLine.substr(bracketEnd);
+
+                    // 更新搜索位置
+                    bracketEnd = bracketStart + 1 + newContent.length();
+                }
+            }
+
+            bracketStart = asmLine.find('[', bracketEnd);
+        }
+
         // **转换为RIP相对寻址**
         asmLine = ConvertToRipRelative(asmLine, ctx);
 
@@ -922,29 +1083,52 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
                 ctx.address, ctx.originalLine.c_str(), size);
         }
         else {
-            // 汇编失败
+            // 汇编失败 - 尝试 SmartAssemble
             ks_err err = ks_errno(ksEngine);
-            LOG_ERROR_F("Failed to assemble for size: %s (error: %s)", asmLine.c_str(), ks_strerror(err));
-            warnings.push_back("Size calculation failed for: " + ctx.originalLine);
+            LOG_DEBUG_F("Failed to assemble for size, trying SmartAssemble: %s", asmLine.c_str());
 
-            // 使用保守估计
-            size_t estimatedSize = 8;
+            std::vector<uint8_t> machineCode;
+            std::string finalInstruction;
 
-            // 特殊处理一些常见指令
-            std::istringstream iss(ctx.processedLine);
-            std::string opcode;
-            iss >> opcode;
-            std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+            if (engine->SmartAssemble(asmLine, ctx.address, machineCode, finalInstruction)) {
+                size_t smartSize = machineCode.size();
+                if (ctx.actualSize != smartSize) {
+                    anyAddressChanged = true;
+                    ctx.actualSize = smartSize;
+                }
+                ctx.sizeCalculated = true;
 
-            if (opcode == "push" || opcode == "pop") estimatedSize = 1;
-            else if (opcode == "je" || opcode == "jne" || opcode == "jg" || opcode == "jl") estimatedSize = 2;
-            else if (opcode == "jmp" || opcode == "call") estimatedSize = 5;
+                // 如果使用了RIP占位符，保存机器码
+                if (ctx.usedRipPlaceholder) {
+                    ctx.machineCode = machineCode;
+                }
 
-            if (ctx.actualSize != estimatedSize) {
-                anyAddressChanged = true;
-                ctx.actualSize = estimatedSize;
+                LOG_DEBUG_F("SmartAssemble size calculation succeeded: %zu bytes for '%s'",
+                    smartSize, ctx.originalLine.c_str());
             }
-        }
+            else {
+                LOG_ERROR_F("Failed to assemble for size: %s (error: %s)", asmLine.c_str(), ks_strerror(err));
+                warnings.push_back("Size calculation failed for: " + ctx.originalLine);
+
+                // 使用保守估计
+                size_t estimatedSize = 8;
+
+                // 特殊处理一些常见指令
+                std::istringstream iss(ctx.processedLine);
+                std::string opcode;
+                iss >> opcode;
+                std::transform(opcode.begin(), opcode.end(), opcode.begin(), ::tolower);
+
+                if (opcode == "push" || opcode == "pop") estimatedSize = 1;
+                else if (opcode == "je" || opcode == "jne" || opcode == "jg" || opcode == "jl") estimatedSize = 2;
+                else if (opcode == "jmp" || opcode == "call") estimatedSize = 5;
+
+                if (ctx.actualSize != estimatedSize) {
+                    anyAddressChanged = true;
+                    ctx.actualSize = estimatedSize;
+                }
+            }
+        }  // 确保这个大括号存在！
 
         currentAddress += ctx.actualSize;
         instructionIndex++;
@@ -963,112 +1147,8 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
 
     return anyAddressChanged;
 }
-
-bool TwoPassAssemblyPass::FixRipOffsets(InstructionContext& ctx, CEAssemblyEngine* engine) {
-    if (!ctx.usedRipPlaceholder || ctx.ripReferences.empty()) {
-        return true;
-    }
-
-    auto symbolMgr = engine->GetSymbolManager();
-
-    for (auto& ref : ctx.ripReferences) {
-        // 获取目标符号地址
-        uintptr_t targetAddr = 0;
-        if (!symbolMgr->GetSymbolAddress(ref.symbolName, targetAddr) || targetAddr == 0) {
-            LOG_ERROR_F("Cannot resolve symbol for RIP fixup: %s", ref.symbolName.c_str());
-            return false;
-        }
-
-        // 计算RIP相对偏移
-        uintptr_t ripAddr = ctx.address + ctx.actualSize;
-        int32_t ripOffset = static_cast<int32_t>(targetAddr - ripAddr);
-
-        // 在机器码中查找 RIP 相对寻址的模式
-        bool found = false;
-
-        for (size_t i = 0; i <= ctx.machineCode.size() - 4; i++) {
-            bool isRipInstruction = false;
-
-            // 检查常见的 RIP 相对寻址模式
-            if (i >= 3) {
-                // mov [rip+disp32],reg 模式: 48 89 05
-                if (ctx.machineCode[i - 3] == 0x48 &&
-                    ctx.machineCode[i - 2] == 0x89 &&
-                    ctx.machineCode[i - 1] == 0x05) {
-                    isRipInstruction = true;
-                }
-                // mov reg,[rip+disp32] 模式: 48 8B 05
-                else if (ctx.machineCode[i - 3] == 0x48 &&
-                    ctx.machineCode[i - 2] == 0x8B &&
-                    ctx.machineCode[i - 1] == 0x05) {
-                    isRipInstruction = true;
-                }
-            }
-            if (i >= 2) {
-                // cmp dword ptr [rip+disp32],imm8 模式: 83 3D
-                if (ctx.machineCode[i - 2] == 0x83 &&
-                    ctx.machineCode[i - 1] == 0x3D) {
-                    isRipInstruction = true;
-                }
-                // cmp dword ptr [rip+disp32],imm32 模式: 81 3D
-                else if (ctx.machineCode[i - 2] == 0x81 &&
-                    ctx.machineCode[i - 1] == 0x3D) {
-                    isRipInstruction = true;
-                }
-            }
-            if (i >= 1) {
-                // 通用检查：ModR/M 字节的低3位是否为101(5) 且 Mod=00
-                uint8_t modRM = ctx.machineCode[i - 1];
-                if ((modRM & 0xC7) == 0x05) { // Mod=00, R/M=101
-                    isRipInstruction = true;
-                }
-            }
-
-            if (isRipInstruction) {
-                // 读取当前的32位值
-                int32_t currentOffset = *reinterpret_cast<int32_t*>(&ctx.machineCode[i]);
-
-                // 检查是否需要更新（可能是0或者是旧的偏移值）
-                if (currentOffset == 0 || currentOffset != ripOffset) {
-                    // 写入正确的偏移
-                    *reinterpret_cast<int32_t*>(&ctx.machineCode[i]) = ripOffset;
-                    found = true;
-
-                    LOG_DEBUG_F("Fixed RIP offset for %s: 0x%X -> 0x%X at position %zu",
-                        ref.symbolName.c_str(), currentOffset, ripOffset, i);
-                    break;
-                }
-                else {
-                    // 偏移已经正确
-                    found = true;
-                    LOG_DEBUG_F("RIP offset for %s already correct: 0x%X at position %zu",
-                        ref.symbolName.c_str(), ripOffset, i);
-                    break;
-                }
-            }
-        }
-
-        if (!found) {
-            // 打印机器码以帮助调试
-            std::stringstream hexDump;
-            hexDump << "Machine code for " << ctx.originalLine << ": ";
-            for (size_t i = 0; i < ctx.machineCode.size() && i < 16; i++) {
-                hexDump << std::hex << std::setw(2) << std::setfill('0')
-                    << (int)ctx.machineCode[i] << " ";
-            }
-            LOG_ERROR(hexDump.str().c_str());
-
-            LOG_ERROR_F("Failed to find RIP pattern in instruction: %s", ctx.originalLine.c_str());
-            return false;
-        }
-    }
-
-    return true;
-}
-
 bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& instructions,
-    CEAssemblyEngine* engine,
-    std::vector<std::string>& warnings) {
+    CEAssemblyEngine* engine, std::vector<std::string>& warnings) {
     auto ksEngine = engine->GetKeystoneEngine();
     if (!ksEngine) return false;
 
@@ -1139,16 +1219,51 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
             }
         }
 
-        // 在 GenerateMachineCode 函数中，处理负偏移
+        // 在GenerateMachineCode 函数中，处理负偏移
         std::string asmLine = ctx.processedLine;
 
         // 处理浮点转换
         if (asmLine.find("(float)") != std::string::npos) {
             asmLine = engine->ProcessFloatConversion(asmLine);
         }
+
+        // 确保处理方括号内的所有数字
         asmLine = PrepareCEStyleHex(asmLine);
-        // 处理负偏移，如 [rdx-0C]
+
+        // 额外处理：确保方括号内的纯数字有0x前缀
         size_t bracketStart = asmLine.find('[');
+        while (bracketStart != std::string::npos) {
+            size_t bracketEnd = asmLine.find(']', bracketStart);
+            if (bracketEnd == std::string::npos) break;
+
+            std::string content = asmLine.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+
+            // 查找 + 或 - 后面的偏移量
+            size_t opPos = content.find_last_of("+-");
+            if (opPos != std::string::npos) {
+                std::string offsetPart = content.substr(opPos + 1);
+                offsetPart.erase(0, offsetPart.find_first_not_of(" \t"));
+                offsetPart.erase(offsetPart.find_last_not_of(" \t") + 1);
+
+                // 如果是纯数字且没有0x前缀，添加它
+                if (!offsetPart.empty() &&
+                    offsetPart.find("0x") != 0 &&
+                    offsetPart.find("0X") != 0 &&
+                    std::all_of(offsetPart.begin(), offsetPart.end(), ::isxdigit)) {
+
+                    std::string newContent = content.substr(0, opPos + 1) + "0x" + offsetPart;
+                    asmLine = asmLine.substr(0, bracketStart + 1) + newContent + asmLine.substr(bracketEnd);
+
+                    // 更新搜索位置
+                    bracketEnd = bracketStart + 1 + newContent.length();
+                }
+            }
+
+            bracketStart = asmLine.find('[', bracketEnd);
+        }
+
+        // 处理负偏移，如 [rdx-0C]
+        bracketStart = asmLine.find('[');
         while (bracketStart != std::string::npos) {
             size_t bracketEnd = asmLine.find(']', bracketStart);
             if (bracketEnd == std::string::npos) break;
@@ -1208,31 +1323,6 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
             bracketStart = asmLine.find('[', bracketEnd);
         }
 
-        // 提取操作码来检查是否需要添加大小指示符
-        // 注意：这里不要重新定义变量，直接解析
-        {
-            size_t firstSpace = asmLine.find(' ');
-            if (firstSpace != std::string::npos) {
-                std::string opcodeCheck = asmLine.substr(0, firstSpace);
-                std::transform(opcodeCheck.begin(), opcodeCheck.end(), opcodeCheck.begin(), ::tolower);
-
-                if ((opcodeCheck == "mov" || opcodeCheck == "cmp") && asmLine.find("ptr") == std::string::npos) {
-                    size_t bracketPos = asmLine.find('[');
-                    if (bracketPos != std::string::npos) {
-                        // 检查是否已经处理过浮点数
-                        if (asmLine.find("0x") != std::string::npos && asmLine.find("0x") > bracketPos) {
-                            // 有十六进制数值，可能是从浮点转换来的，使用dword ptr
-                            asmLine.insert(bracketPos, "dword ptr ");
-                        }
-                        else {
-                            // 默认dword ptr
-                            asmLine.insert(bracketPos, "dword ptr ");
-                        }
-                    }
-                }
-            }
-        }
-
         // 转换为RIP相对寻址（如果还没转换）
         if (!ctx.usedRipPlaceholder) {
             asmLine = ConvertToRipRelative(asmLine, ctx);
@@ -1264,13 +1354,26 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
         }
         else {
             ks_err err = ks_errno(ksEngine);
-            warnings.push_back("Assembly failed for '" + ctx.originalLine + "': " + ks_strerror(err));
+            LOG_DEBUG_F("Initial assembly failed, trying SmartAssemble for: %s", asmLine.c_str());
+
+            // 尝试使用 SmartAssemble
+            std::vector<uint8_t> machineCode;
+            std::string finalInstruction;
+
+            if (engine->SmartAssemble(asmLine, ctx.address, machineCode, finalInstruction)) {
+                ctx.machineCode = machineCode;
+                ctx.assembled = true;
+                LOG_DEBUG_F("SmartAssemble succeeded with: %s", finalInstruction.c_str());
+            }
+            else {
+                warnings.push_back("Assembly failed for '" + ctx.originalLine + "': " + ks_strerror(err));
+                LOG_ERROR_F("Both regular and smart assembly failed for: %s", ctx.originalLine.c_str());
+            }
         }
     }
 
     return true;
 }
-
 bool TwoPassAssemblyPass::ProcessSpecialInstruction(InstructionContext& ctx, CEAssemblyEngine* engine) {
     std::string opcode;
     std::istringstream iss(ctx.processedLine);
@@ -1306,6 +1409,27 @@ bool TwoPassAssemblyPass::ProcessSpecialInstruction(InstructionContext& ctx, CEA
     }
 
     return false;
+}
+size_t TwoPassAssemblyPass::CalculateDataSize(const std::string& line) {
+    std::istringstream iss(line);
+    std::string directive;
+    iss >> directive;
+    std::transform(directive.begin(), directive.end(), directive.begin(), ::tolower);
+
+    size_t multiplier = 1;
+    if (directive == "db") multiplier = 1;
+    else if (directive == "dw") multiplier = 2;
+    else if (directive == "dd") multiplier = 4;
+    else if (directive == "dq") multiplier = 8;
+    else return 0;
+
+    size_t count = 0;
+    std::string value;
+    while (iss >> value) {
+        if (value != ",") count++;
+    }
+
+    return count * multiplier;
 }
 std::string TwoPassAssemblyPass::ConvertToRipRelative(const std::string& line, InstructionContext& ctx) {
     // 解析指令
@@ -1455,31 +1579,235 @@ std::string TwoPassAssemblyPass::ConvertToRipRelative(const std::string& line, I
 
     return result;
 }
+std::string TwoPassAssemblyPass::PrepareCEStyleHex(const std::string& line) {
+    std::string result = line;
 
-size_t TwoPassAssemblyPass::CalculateDataSize(const std::string& line) {
-    std::istringstream iss(line);
-    std::string directive;
-    iss >> directive;
-    std::transform(directive.begin(), directive.end(), directive.begin(), ::tolower);
+    // 查找方括号内的内容
+    size_t bracketStart = result.find('[');
+    while (bracketStart != std::string::npos) {
+        size_t bracketEnd = result.find(']', bracketStart);
+        if (bracketEnd == std::string::npos) break;
 
-    size_t multiplier = 1;
-    if (directive == "db") multiplier = 1;
-    else if (directive == "dw") multiplier = 2;
-    else if (directive == "dd") multiplier = 4;
-    else if (directive == "dq") multiplier = 8;
-    else return 0;
+        std::string content = result.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+        std::string newContent = content;
 
-    size_t count = 0;
-    std::string value;
-    while (iss >> value) {
-        if (value != ",") count++;
+        // 查找 + 或 - 符号
+        size_t opPos = content.find('+');
+        bool isPlus = true;
+        if (opPos == std::string::npos) {
+            opPos = content.find('-');
+            isPlus = false;
+        }
+
+        if (opPos != std::string::npos) {
+            std::string regPart = content.substr(0, opPos);
+            std::string offsetPart = content.substr(opPos + 1);
+
+            // 去除空格
+            regPart.erase(std::remove_if(regPart.begin(), regPart.end(), ::isspace), regPart.end());
+            offsetPart.erase(std::remove_if(offsetPart.begin(), offsetPart.end(), ::isspace), offsetPart.end());
+
+            // 如果是寄存器+偏移的格式
+            if (isX64RegisterName(regPart)) {
+                // 检查偏移是否需要添加 0x 前缀
+                if (!offsetPart.empty() &&
+                    offsetPart.find("0x") != 0 &&
+                    offsetPart.find("0X") != 0 &&
+                    offsetPart[0] != '$') {
+
+                    // CE 风格：方括号内的数字默认是十六进制
+                    // 不管是否包含 A-F，都添加 0x 前缀
+                    bool isNumeric = std::all_of(offsetPart.begin(), offsetPart.end(),
+                        [](char c) { return std::isxdigit(c); });
+
+                    if (isNumeric) {
+                        newContent = regPart + (isPlus ? "+0x" : "-0x") + offsetPart;
+                        result = result.substr(0, bracketStart + 1) + newContent + result.substr(bracketEnd);
+
+                        LOG_DEBUG_F("Fixed CE-style hex: [%s] -> [%s]", content.c_str(), newContent.c_str());
+
+                        // 更新搜索位置
+                        bracketEnd = bracketStart + 1 + newContent.length();
+                    }
+                }
+            }
+        }
+
+        // 查找下一个方括号
+        bracketStart = result.find('[', bracketEnd);
     }
 
-    return count * multiplier;
+    return result;
+}
+std::string TwoPassAssemblyPass::ProcessNegativeOffset(const std::string& line) {
+    std::string result = line;
+
+    // 查找 [寄存器-偏移] 模式
+    size_t bracketStart = result.find('[');
+    while (bracketStart != std::string::npos) {
+        size_t bracketEnd = result.find(']', bracketStart);
+        if (bracketEnd == std::string::npos) break;
+
+        std::string memOperand = result.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+
+        // 查找减号
+        size_t minusPos = memOperand.find('-');
+        if (minusPos != std::string::npos && minusPos > 0) {
+            std::string regPart = memOperand.substr(0, minusPos);
+            std::string offsetPart = memOperand.substr(minusPos + 1);
+
+            // 去除空格
+            regPart.erase(std::remove_if(regPart.begin(), regPart.end(), ::isspace), regPart.end());
+            offsetPart.erase(std::remove_if(offsetPart.begin(), offsetPart.end(), ::isspace), offsetPart.end());
+
+            // 检查是否是寄存器
+            if (isX64RegisterName(regPart)) {
+                // 解析偏移值
+                unsigned int offset = 0;
+                bool parsed = false;
+
+                try {
+                    if (offsetPart.find("0x") == 0 || offsetPart.find("0X") == 0) {
+                        offset = std::stoul(offsetPart.substr(2), nullptr, 16);
+                        parsed = true;
+                    }
+                    else if (std::all_of(offsetPart.begin(), offsetPart.end(), ::isxdigit)) {
+                        offset = std::stoul(offsetPart, nullptr, 16);
+                        parsed = true;
+                    }
+                }
+                catch (...) {
+                    parsed = false;
+                }
+
+                if (parsed) {
+                    // 转换为补码形式
+                    unsigned int negOffset = (~offset + 1) & 0xFFFFFFFF;
+
+                    // 构建新的内存操作数
+                    std::stringstream newOperand;
+                    newOperand << "[" << regPart << "+0x" << std::hex << negOffset << "]";
+
+                    // 替换原来的操作数
+                    result = result.substr(0, bracketStart) +
+                        newOperand.str() +
+                        result.substr(bracketEnd + 1);
+
+                    LOG_DEBUG_F("Converted negative offset: [%s-%s] -> %s",
+                        regPart.c_str(), offsetPart.c_str(), newOperand.str().c_str());
+                }
+            }
+        }
+
+        // 查找下一个
+        bracketStart = result.find('[', bracketEnd);
+    }
+
+    return result;
+}
+bool TwoPassAssemblyPass::FixRipOffsets(InstructionContext& ctx, CEAssemblyEngine* engine) {
+    if (!ctx.usedRipPlaceholder || ctx.ripReferences.empty()) {
+        return true;
+    }
+
+    auto symbolMgr = engine->GetSymbolManager();
+
+    for (auto& ref : ctx.ripReferences) {
+        // 获取目标符号地址
+        uintptr_t targetAddr = 0;
+        if (!symbolMgr->GetSymbolAddress(ref.symbolName, targetAddr) || targetAddr == 0) {
+            LOG_ERROR_F("Cannot resolve symbol for RIP fixup: %s", ref.symbolName.c_str());
+            return false;
+        }
+
+        // 计算RIP相对偏移
+        uintptr_t ripAddr = ctx.address + ctx.actualSize;
+        int32_t ripOffset = static_cast<int32_t>(targetAddr - ripAddr);
+
+        // 在机器码中查找 RIP 相对寻址的模式
+        bool found = false;
+
+        for (size_t i = 0; i <= ctx.machineCode.size() - 4; i++) {
+            bool isRipInstruction = false;
+
+            // 检查常见的 RIP 相对寻址模式
+            if (i >= 3) {
+                // mov [rip+disp32],reg 模式: 48 89 05
+                if (ctx.machineCode[i - 3] == 0x48 &&
+                    ctx.machineCode[i - 2] == 0x89 &&
+                    ctx.machineCode[i - 1] == 0x05) {
+                    isRipInstruction = true;
+                }
+                // mov reg,[rip+disp32] 模式: 48 8B 05
+                else if (ctx.machineCode[i - 3] == 0x48 &&
+                    ctx.machineCode[i - 2] == 0x8B &&
+                    ctx.machineCode[i - 1] == 0x05) {
+                    isRipInstruction = true;
+                }
+            }
+            if (i >= 2) {
+                // cmp dword ptr [rip+disp32],imm8 模式: 83 3D
+                if (ctx.machineCode[i - 2] == 0x83 &&
+                    ctx.machineCode[i - 1] == 0x3D) {
+                    isRipInstruction = true;
+                }
+                // cmp dword ptr [rip+disp32],imm32 模式: 81 3D
+                else if (ctx.machineCode[i - 2] == 0x81 &&
+                    ctx.machineCode[i - 1] == 0x3D) {
+                    isRipInstruction = true;
+                }
+            }
+            if (i >= 1) {
+                // 通用检查：ModR/M 字节的低3位是否为101(5) 且 Mod=00
+                uint8_t modRM = ctx.machineCode[i - 1];
+                if ((modRM & 0xC7) == 0x05) { // Mod=00, R/M=101
+                    isRipInstruction = true;
+                }
+            }
+
+            if (isRipInstruction) {
+                // 读取当前的32位值
+                int32_t currentOffset = *reinterpret_cast<int32_t*>(&ctx.machineCode[i]);
+
+                // 检查是否需要更新（可能是0或者是旧的偏移值）
+                if (currentOffset == 0 || currentOffset != ripOffset) {
+                    // 写入正确的偏移
+                    *reinterpret_cast<int32_t*>(&ctx.machineCode[i]) = ripOffset;
+                    found = true;
+
+                    LOG_DEBUG_F("Fixed RIP offset for %s: 0x%X -> 0x%X at position %zu",
+                        ref.symbolName.c_str(), currentOffset, ripOffset, i);
+                    break;
+                }
+                else {
+                    // 偏移已经正确
+                    found = true;
+                    LOG_DEBUG_F("RIP offset for %s already correct: 0x%X at position %zu",
+                        ref.symbolName.c_str(), ripOffset, i);
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            // 打印机器码以帮助调试
+            std::stringstream hexDump;
+            hexDump << "Machine code for " << ctx.originalLine << ": ";
+            for (size_t i = 0; i < ctx.machineCode.size() && i < 16; i++) {
+                hexDump << std::hex << std::setw(2) << std::setfill('0')
+                    << (int)ctx.machineCode[i] << " ";
+            }
+            LOG_ERROR(hexDump.str().c_str());
+
+            LOG_ERROR_F("Failed to find RIP pattern in instruction: %s", ctx.originalLine.c_str());
+            return false;
+        }
+    }
+
+    return true;
 }
 
-// ==================== CodeEmissionPass 实现 ====================
-
+// CodeEmissionPass 实现
 PassResult CodeEmissionPass::Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) {
     PassResult result;
     result.success = true;

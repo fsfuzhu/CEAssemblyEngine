@@ -15,7 +15,6 @@ void TestComplexScript() {
 
     // The complex script with captured variables and float conversions
     std::string scriptContent = R"(
-
 [ENABLE]
 
 aobscanmodule(aobplayer,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
@@ -73,7 +72,6 @@ aobplayer:
 
 unregistersymbol(aobplayer)
 dealloc(newmem)
-
 )";
 
     CEAssemblyEngine engine;

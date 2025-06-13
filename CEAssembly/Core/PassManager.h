@@ -1,4 +1,4 @@
-// PassManager.h - 多遍处理管理器（完整修改版）
+// PassManager.h - Multi-pass processing manager
 #pragma once
 #include <string>
 #include <vector>
@@ -6,57 +6,57 @@
 #include <functional>
 #include <Windows.h>
 
-// 前向声明
+// Forward declarations
 class CEAssemblyEngine;
 class SymbolManager;
 class MemoryManager;
 class PatternScanner;
 enum class CommandType;
 
-// RIP引用信息
+// RIP reference information
 struct RipReference {
-    size_t instructionIndex;     // 指令索引
-    std::string symbolName;      // 引用的符号名
-    size_t ripOffsetPosition;    // RIP偏移在机器码中的位置
-    bool is32bit;                // 是否是32位偏移（true）还是8位（false）
+    size_t instructionIndex;
+    std::string symbolName;
+    size_t ripOffsetPosition;
+    bool is32bit;
 };
 
-// 指令的中间表示
+// Instruction context
 struct InstructionContext {
-    // 基本信息
-    std::string originalLine;        // 原始行
-    std::string processedLine;       // 处理后的行
-    CommandType commandType;         // 命令类型
-    std::vector<std::string> parameters;  // 参数
+    // Basic information
+    std::string originalLine;
+    std::string processedLine;
+    CommandType commandType;
+    std::vector<std::string> parameters;
 
-    // 地址和大小信息
-    uintptr_t address = 0;          // 指令地址
-    size_t actualSize = 0;          // 实际大小（由汇编器确定）
-    std::vector<uint8_t> machineCode;    // 机器码
+    // Address and size information
+    uintptr_t address = 0;
+    size_t actualSize = 0;
+    std::vector<uint8_t> machineCode;
 
-    // 标签信息
-    bool isLabelDef = false;        // 是否是标签定义
-    std::string labelName;          // 标签名称
+    // Label information
+    bool isLabelDef = false;
+    std::string labelName;
 
-    // 偏移标签相关
-    bool isOffsetLabel = false;     // 是否是偏移标签（如 newmem+200）
-    std::string baseLabel;          // 基础标签名（如 "newmem"）
-    std::string offsetStr;          // 偏移字符串（如 "200"）
+    // Offset label related
+    bool isOffsetLabel = false;
+    std::string baseLabel;
+    std::string offsetStr;
 
-    // 状态标记
-    bool needsSymbolResolution = false;   // 需要符号解析
-    bool sizeCalculated = false;          // 大小已计算
-    bool assembled = false;               // 已汇编
-    bool usedRipPlaceholder = false;      // 使用了RIP占位符
+    // Status flags
+    bool needsSymbolResolution = false;
+    bool sizeCalculated = false;
+    bool assembled = false;
+    bool usedRipPlaceholder = false;
 
-    // 符号依赖
-    std::vector<std::string> unresolvedSymbols;  // 未解析的符号
+    // Symbol dependencies
+    std::vector<std::string> unresolvedSymbols;
 
-    // RIP引用
-    std::vector<RipReference> ripReferences;     // RIP引用列表
+    // RIP references
+    std::vector<RipReference> ripReferences;
 };
 
-// Pass 执行结果
+// Pass execution result
 struct PassResult {
     bool success = true;
     std::string errorMessage;
@@ -65,39 +65,34 @@ struct PassResult {
     int instructionsModified = 0;
 };
 
-// Pass 基类
+// Base class for processing passes
 class ProcessingPass {
 public:
     virtual ~ProcessingPass() = default;
 
-    // 获取 Pass 名称
     virtual std::string GetName() const = 0;
-
-    // 执行 Pass
     virtual PassResult Execute(
         std::vector<InstructionContext>& instructions,
         CEAssemblyEngine* engine
     ) = 0;
-
-    // 是否需要重复执行直到稳定
     virtual bool RequiresIteration() const { return false; }
 };
 
-// Pass 1: 预处理和命令识别
+// Pass 1: Preprocessing and command identification
 class PreprocessingPass : public ProcessingPass {
 public:
     std::string GetName() const override { return "Preprocessing"; }
     PassResult Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) override;
 };
 
-// Pass 2: 符号收集（处理 aobscanmodule, alloc, label 等）
+// Pass 2: Symbol collection (aobscanmodule, alloc, label, etc.)
 class SymbolCollectionPass : public ProcessingPass {
 public:
     std::string GetName() const override { return "Symbol Collection"; }
     PassResult Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) override;
 };
 
-// Pass 3: 两遍汇编（地址分配 + 代码生成）
+// Pass 3: Two-pass assembly (address allocation + code generation)
 class TwoPassAssemblyPass : public ProcessingPass {
 public:
     std::string GetName() const override { return "Two-Pass Assembly"; }
@@ -105,56 +100,54 @@ public:
     bool RequiresIteration() const override { return true; }
 
 private:
-    // 第一遍：计算大小和分配地址（使用RIP占位符）
+    // First pass: calculate sizes and allocate addresses
     bool CalculateSizesAndAddresses(std::vector<InstructionContext>& instructions,
         CEAssemblyEngine* engine,
         std::vector<std::string>& warnings);
 
-    // 第二遍：生成机器码（修正RIP偏移）
+    // Second pass: generate machine code
     bool GenerateMachineCode(std::vector<InstructionContext>& instructions,
         CEAssemblyEngine* engine,
         std::vector<std::string>& warnings);
 
-    // 辅助方法
+    // Helper methods
     bool ProcessSpecialInstruction(InstructionContext& ctx, CEAssemblyEngine* engine);
     size_t CalculateDataSize(const std::string& line);
-
-    // 新增：将符号替换为RIP相对寻址
     std::string ConvertToRipRelative(const std::string& line, InstructionContext& ctx);
-
-    // 新增：修正RIP偏移
+    std::string PrepareCEStyleHex(const std::string& line);
+    std::string ProcessNegativeOffset(const std::string& line);
     bool FixRipOffsets(InstructionContext& ctx, CEAssemblyEngine* engine);
 };
 
-// Pass 4: 代码写入
+// Pass 4: Code emission
 class CodeEmissionPass : public ProcessingPass {
 public:
     std::string GetName() const override { return "Code Emission"; }
     PassResult Execute(std::vector<InstructionContext>& instructions, CEAssemblyEngine* engine) override;
 };
 
-// Pass 管理器
+// Pass Manager
 class PassManager {
 public:
     PassManager();
     ~PassManager();
 
-    // 添加 Pass
+    // Add a processing pass
     void AddPass(std::unique_ptr<ProcessingPass> pass);
 
-    // 执行所有 Pass
+    // Run all passes
     bool RunAllPasses(
         const std::vector<std::string>& lines,
         CEAssemblyEngine* engine
     );
 
-    // 获取最后的错误信息
+    // Get error information
     std::string GetLastError() const { return m_lastError; }
 
-    // 获取处理后的指令
+    // Get processed instructions
     const std::vector<InstructionContext>& GetInstructions() const { return m_instructions; }
 
-    // 获取执行统计
+    // Get statistics
     void GetStatistics(int& totalPasses, int& totalInstructions) const;
 
 private:
@@ -162,6 +155,12 @@ private:
     std::vector<InstructionContext> m_instructions;
     std::string m_lastError;
 
-    // 将原始行转换为指令上下文
+    // Convert raw lines to instruction contexts
     void ConvertLinesToInstructions(const std::vector<std::string>& lines);
 };
+
+// Helper functions (defined in cpp)
+bool isX64RegisterName(const std::string& token);
+bool isX64Mnemonic(const std::string& token);
+bool isSizeSpecifier(const std::string& token);
+bool isDataDirective(const std::string& token);
