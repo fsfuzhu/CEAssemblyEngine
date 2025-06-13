@@ -620,7 +620,7 @@ PassResult TwoPassAssemblyPass::Execute(std::vector<InstructionContext>& instruc
     std::map<uintptr_t, std::string> allLabels;
 
     // 迭代直到稳定
-    const int MAX_ITERATIONS = 10;
+    const int MAX_ITERATIONS = 100;
     bool stabilized = false;
 
     for (int iteration = 0; iteration < MAX_ITERATIONS && !stabilized; iteration++) {
@@ -690,7 +690,61 @@ PassResult TwoPassAssemblyPass::Execute(std::vector<InstructionContext>& instruc
 
     return result;
 }
+// 在 CalculateSizesAndAddresses 函数中，在处理浮点转换之后添加这个函数
+std::string PrepareCEStyleHex(const std::string& line) {
+    std::string result = line;
 
+    // 查找方括号内的内容
+    size_t bracketStart = result.find('[');
+    while (bracketStart != std::string::npos) {
+        size_t bracketEnd = result.find(']', bracketStart);
+        if (bracketEnd == std::string::npos) break;
+
+        std::string content = result.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+        std::string newContent = content;
+
+        // 查找 + 或 - 符号
+        size_t opPos = content.find('+');
+        bool isPlus = true;
+        if (opPos == std::string::npos) {
+            opPos = content.find('-');
+            isPlus = false;
+        }
+
+        if (opPos != std::string::npos) {
+            std::string regPart = content.substr(0, opPos);
+            std::string offsetPart = content.substr(opPos + 1);
+
+            // 去除空格
+            regPart.erase(std::remove_if(regPart.begin(), regPart.end(), ::isspace), regPart.end());
+            offsetPart.erase(std::remove_if(offsetPart.begin(), offsetPart.end(), ::isspace), offsetPart.end());
+
+            // 如果是寄存器+偏移的格式
+            if (isX64RegisterName(regPart)) {
+                // 检查偏移是否需要添加 0x 前缀
+                if (!offsetPart.empty() &&
+                    offsetPart.find("0x") != 0 &&
+                    offsetPart.find("0X") != 0 &&
+                    offsetPart[0] != '$' &&
+                    std::all_of(offsetPart.begin(), offsetPart.end(), ::isxdigit)) {
+                    // CE 风格的十六进制数，添加 0x 前缀
+                    newContent = regPart + (isPlus ? "+0x" : "-0x") + offsetPart;
+                    result = result.substr(0, bracketStart + 1) + newContent + result.substr(bracketEnd);
+
+                    LOG_DEBUG_F("Fixed CE-style hex: [%s] -> [%s]", content.c_str(), newContent.c_str());
+
+                    // 更新搜索位置
+                    bracketEnd = bracketStart + 1 + newContent.length();
+                }
+            }
+        }
+
+        // 查找下一个方括号
+        bracketStart = result.find('[', bracketEnd);
+    }
+
+    return result;
+}
 bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionContext>& instructions,
     CEAssemblyEngine* engine,
     std::vector<std::string>& warnings) {
@@ -836,7 +890,7 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
         if (asmLine.find("(float)") != std::string::npos) {
             asmLine = engine->ProcessFloatConversion(asmLine);
         }
-
+        asmLine = PrepareCEStyleHex(asmLine);
         // **转换为RIP相对寻址**
         asmLine = ConvertToRipRelative(asmLine, ctx);
 
@@ -917,7 +971,6 @@ bool TwoPassAssemblyPass::FixRipOffsets(InstructionContext& ctx, CEAssemblyEngin
 
     auto symbolMgr = engine->GetSymbolManager();
 
-    // 对每个RIP引用
     for (auto& ref : ctx.ripReferences) {
         // 获取目标符号地址
         uintptr_t targetAddr = 0;
@@ -927,70 +980,85 @@ bool TwoPassAssemblyPass::FixRipOffsets(InstructionContext& ctx, CEAssemblyEngin
         }
 
         // 计算RIP相对偏移
-        // RIP在指令执行时指向下一条指令
         uintptr_t ripAddr = ctx.address + ctx.actualSize;
         int32_t ripOffset = static_cast<int32_t>(targetAddr - ripAddr);
 
-        // 在机器码中查找 RIP+0 模式并修正
+        // 在机器码中查找 RIP 相对寻址的模式
         bool found = false;
 
-        // x64指令中，RIP相对寻址通常编码为：
-        // ModR/M byte with Mod=00, R/M=101 (0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D等)
-        // 后跟4字节偏移
+        for (size_t i = 0; i <= ctx.machineCode.size() - 4; i++) {
+            bool isRipInstruction = false;
 
-        for (size_t i = 0; i < ctx.machineCode.size() - 4; i++) {
-            uint8_t modrm = ctx.machineCode[i];
-
-            // 检查是否是RIP相对寻址的ModR/M字节
-            if ((modrm & 0xC7) == 0x05) { // Mod=00, R/M=101
-                // 检查后面4字节是否全为0（我们的占位符）
-                bool isZero = true;
-                for (size_t j = 1; j <= 4 && i + j < ctx.machineCode.size(); j++) {
-                    if (ctx.machineCode[i + j] != 0x00) {
-                        isZero = false;
-                        break;
-                    }
+            // 检查常见的 RIP 相对寻址模式
+            if (i >= 3) {
+                // mov [rip+disp32],reg 模式: 48 89 05
+                if (ctx.machineCode[i - 3] == 0x48 &&
+                    ctx.machineCode[i - 2] == 0x89 &&
+                    ctx.machineCode[i - 1] == 0x05) {
+                    isRipInstruction = true;
                 }
+                // mov reg,[rip+disp32] 模式: 48 8B 05
+                else if (ctx.machineCode[i - 3] == 0x48 &&
+                    ctx.machineCode[i - 2] == 0x8B &&
+                    ctx.machineCode[i - 1] == 0x05) {
+                    isRipInstruction = true;
+                }
+            }
+            if (i >= 2) {
+                // cmp dword ptr [rip+disp32],imm8 模式: 83 3D
+                if (ctx.machineCode[i - 2] == 0x83 &&
+                    ctx.machineCode[i - 1] == 0x3D) {
+                    isRipInstruction = true;
+                }
+                // cmp dword ptr [rip+disp32],imm32 模式: 81 3D
+                else if (ctx.machineCode[i - 2] == 0x81 &&
+                    ctx.machineCode[i - 1] == 0x3D) {
+                    isRipInstruction = true;
+                }
+            }
+            if (i >= 1) {
+                // 通用检查：ModR/M 字节的低3位是否为101(5) 且 Mod=00
+                uint8_t modRM = ctx.machineCode[i - 1];
+                if ((modRM & 0xC7) == 0x05) { // Mod=00, R/M=101
+                    isRipInstruction = true;
+                }
+            }
 
-                if (isZero) {
-                    // 写入计算出的偏移
-                    *reinterpret_cast<int32_t*>(&ctx.machineCode[i + 1]) = ripOffset;
+            if (isRipInstruction) {
+                // 读取当前的32位值
+                int32_t currentOffset = *reinterpret_cast<int32_t*>(&ctx.machineCode[i]);
+
+                // 检查是否需要更新（可能是0或者是旧的偏移值）
+                if (currentOffset == 0 || currentOffset != ripOffset) {
+                    // 写入正确的偏移
+                    *reinterpret_cast<int32_t*>(&ctx.machineCode[i]) = ripOffset;
                     found = true;
 
-                    LOG_DEBUG_F("Fixed RIP offset for %s: 0x%X (target: 0x%llX, rip: 0x%llX)",
-                        ref.symbolName.c_str(), ripOffset, targetAddr, ripAddr);
+                    LOG_DEBUG_F("Fixed RIP offset for %s: 0x%X -> 0x%X at position %zu",
+                        ref.symbolName.c_str(), currentOffset, ripOffset, i);
+                    break;
+                }
+                else {
+                    // 偏移已经正确
+                    found = true;
+                    LOG_DEBUG_F("RIP offset for %s already correct: 0x%X at position %zu",
+                        ref.symbolName.c_str(), ripOffset, i);
                     break;
                 }
             }
         }
 
         if (!found) {
-            // 尝试更宽松的搜索：查找任何4字节的0序列
-            for (size_t i = 0; i <= ctx.machineCode.size() - 4; i++) {
-                if (ctx.machineCode[i] == 0x00 &&
-                    ctx.machineCode[i + 1] == 0x00 &&
-                    ctx.machineCode[i + 2] == 0x00 &&
-                    ctx.machineCode[i + 3] == 0x00) {
-
-                    // 检查前一个字节是否可能是ModR/M字节
-                    if (i > 0) {
-                        uint8_t prevByte = ctx.machineCode[i - 1];
-                        // 简单检查：是否可能是涉及RIP的指令
-                        if ((prevByte & 0xC0) == 0x00 || (prevByte & 0xC0) == 0x40 || (prevByte & 0xC0) == 0x80) {
-                            *reinterpret_cast<int32_t*>(&ctx.machineCode[i]) = ripOffset;
-                            found = true;
-
-                            LOG_DEBUG_F("Fixed RIP offset (loose match) for %s: 0x%X",
-                                ref.symbolName.c_str(), ripOffset);
-                            break;
-                        }
-                    }
-                }
+            // 打印机器码以帮助调试
+            std::stringstream hexDump;
+            hexDump << "Machine code for " << ctx.originalLine << ": ";
+            for (size_t i = 0; i < ctx.machineCode.size() && i < 16; i++) {
+                hexDump << std::hex << std::setw(2) << std::setfill('0')
+                    << (int)ctx.machineCode[i] << " ";
             }
-        }
+            LOG_ERROR(hexDump.str().c_str());
 
-        if (!found) {
-            LOG_ERROR_F("Failed to find RIP+0 pattern in instruction: %s", ctx.originalLine.c_str());
+            LOG_ERROR_F("Failed to find RIP pattern in instruction: %s", ctx.originalLine.c_str());
             return false;
         }
     }
@@ -1071,12 +1139,98 @@ bool TwoPassAssemblyPass::GenerateMachineCode(std::vector<InstructionContext>& i
             }
         }
 
-        // 正常汇编流程
+        // 在 GenerateMachineCode 函数中，处理负偏移
         std::string asmLine = ctx.processedLine;
 
         // 处理浮点转换
         if (asmLine.find("(float)") != std::string::npos) {
             asmLine = engine->ProcessFloatConversion(asmLine);
+        }
+        asmLine = PrepareCEStyleHex(asmLine);
+        // 处理负偏移，如 [rdx-0C]
+        size_t bracketStart = asmLine.find('[');
+        while (bracketStart != std::string::npos) {
+            size_t bracketEnd = asmLine.find(']', bracketStart);
+            if (bracketEnd == std::string::npos) break;
+
+            std::string content = asmLine.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+            size_t minusPos = content.find('-');
+
+            if (minusPos != std::string::npos && minusPos > 0) {
+                std::string regPart = content.substr(0, minusPos);
+                std::string offsetPart = content.substr(minusPos + 1);
+
+                // 去除空格
+                regPart.erase(std::remove_if(regPart.begin(), regPart.end(), ::isspace), regPart.end());
+                offsetPart.erase(std::remove_if(offsetPart.begin(), offsetPart.end(), ::isspace), offsetPart.end());
+
+                // 检查是否是寄存器
+                if (isX64RegisterName(regPart)) {
+                    try {
+                        // 解析偏移值
+                        unsigned int offset = 0;
+                        if (offsetPart.find("0x") == 0 || offsetPart.find("0X") == 0) {
+                            offset = std::stoul(offsetPart.substr(2), nullptr, 16);
+                        }
+                        else if (std::all_of(offsetPart.begin(), offsetPart.end(), ::isxdigit)) {
+                            // CE风格：纯十六进制数字
+                            offset = std::stoul(offsetPart, nullptr, 16);
+                        }
+                        else {
+                            offset = std::stoul(offsetPart, nullptr, 10);
+                        }
+
+                        // 转换为补码形式
+                        unsigned int negOffset = (~offset + 1) & 0xFFFFFFFF;
+
+                        // 构建新的内存操作数
+                        std::stringstream newOperand;
+                        newOperand << "[" << regPart << "+0x" << std::hex << negOffset << "]";
+
+                        // 替换原来的操作数
+                        asmLine = asmLine.substr(0, bracketStart) +
+                            newOperand.str() +
+                            asmLine.substr(bracketEnd + 1);
+
+                        LOG_DEBUG_F("Converted negative offset: [%s-%s] -> %s",
+                            regPart.c_str(), offsetPart.c_str(), newOperand.str().c_str());
+
+                        // 更新搜索位置
+                        bracketEnd = bracketStart + newOperand.str().length();
+                    }
+                    catch (...) {
+                        // 解析失败，保持原样
+                    }
+                }
+            }
+
+            // 查找下一个方括号
+            bracketStart = asmLine.find('[', bracketEnd);
+        }
+
+        // 提取操作码来检查是否需要添加大小指示符
+        // 注意：这里不要重新定义变量，直接解析
+        {
+            size_t firstSpace = asmLine.find(' ');
+            if (firstSpace != std::string::npos) {
+                std::string opcodeCheck = asmLine.substr(0, firstSpace);
+                std::transform(opcodeCheck.begin(), opcodeCheck.end(), opcodeCheck.begin(), ::tolower);
+
+                if ((opcodeCheck == "mov" || opcodeCheck == "cmp") && asmLine.find("ptr") == std::string::npos) {
+                    size_t bracketPos = asmLine.find('[');
+                    if (bracketPos != std::string::npos) {
+                        // 检查是否已经处理过浮点数
+                        if (asmLine.find("0x") != std::string::npos && asmLine.find("0x") > bracketPos) {
+                            // 有十六进制数值，可能是从浮点转换来的，使用dword ptr
+                            asmLine.insert(bracketPos, "dword ptr ");
+                        }
+                        else {
+                            // 默认dword ptr
+                            asmLine.insert(bracketPos, "dword ptr ");
+                        }
+                    }
+                }
+            }
         }
 
         // 转换为RIP相对寻址（如果还没转换）
@@ -1204,7 +1358,7 @@ std::string TwoPassAssemblyPass::ConvertToRipRelative(const std::string& line, I
             isPureSymbol = false;
         }
 
-        // 检查是否是复杂表达式（但允许简单的偏移如rdx-0C）
+        // 检查是否是复杂表达式
         if (memOperand.find('+') != std::string::npos ||
             memOperand.find('*') != std::string::npos) {
             isPureSymbol = false;
@@ -1212,7 +1366,6 @@ std::string TwoPassAssemblyPass::ConvertToRipRelative(const std::string& line, I
 
         // 特殊处理 reg-offset 格式（如 rdx-0C）
         if (memOperand.find('-') != std::string::npos) {
-            // 检查是否是 寄存器-偏移 格式
             size_t minusPos = memOperand.find('-');
             std::string beforeMinus = memOperand.substr(0, minusPos);
             if (isX64RegisterName(beforeMinus)) {
@@ -1223,18 +1376,77 @@ std::string TwoPassAssemblyPass::ConvertToRipRelative(const std::string& line, I
         if (isPureSymbol && !memOperand.empty()) {
             // 记录RIP引用
             RipReference ref;
-            ref.instructionIndex = 0; // 将在后面设置
+            ref.instructionIndex = 0;
             ref.symbolName = memOperand;
-            ref.ripOffsetPosition = 0; // 将在汇编后确定
-            ref.is32bit = true; // x64默认使用32位RIP偏移
+            ref.ripOffsetPosition = 0;
+            ref.is32bit = true;
 
             ctx.ripReferences.push_back(ref);
             ctx.usedRipPlaceholder = true;
 
-            // 替换为 [rip+0]
-            result = result.substr(0, bracketStart + 1) + "rip+0" + result.substr(bracketEnd);
+            // 智能处理大小指示符
+            size_t ptrPos = result.rfind("ptr", bracketStart);
+            bool hasSizeSpec = (ptrPos != std::string::npos && ptrPos < bracketStart);
 
-            LOG_DEBUG_F("Converted [%s] to [rip+0] in: %s", memOperand.c_str(), line.c_str());
+            if (!hasSizeSpec) {
+                // 没有大小指示符，需要根据上下文决定是否添加
+
+                // 对于mov指令，需要检查源操作数
+                if (opcode == "mov") {
+                    // 提取源操作数（逗号后面的部分）
+                    size_t commaPos = result.find(',', bracketEnd);
+                    if (commaPos != std::string::npos) {
+                        std::string srcOperand = result.substr(commaPos + 1);
+                        srcOperand.erase(0, srcOperand.find_first_not_of(" \t"));
+                        srcOperand.erase(srcOperand.find_last_not_of(" \t") + 1);
+
+                        // 如果源操作数是64位寄存器，不需要大小指示符
+                        std::string lowerSrc = srcOperand;
+                        std::transform(lowerSrc.begin(), lowerSrc.end(), lowerSrc.begin(), ::tolower);
+
+                        if (lowerSrc == "rax" || lowerSrc == "rbx" || lowerSrc == "rcx" ||
+                            lowerSrc == "rdx" || lowerSrc == "rsi" || lowerSrc == "rdi" ||
+                            lowerSrc == "rbp" || lowerSrc == "rsp" ||
+                            lowerSrc.find("r8") == 0 || lowerSrc.find("r9") == 0 ||
+                            lowerSrc.find("r10") == 0 || lowerSrc.find("r11") == 0 ||
+                            lowerSrc.find("r12") == 0 || lowerSrc.find("r13") == 0 ||
+                            lowerSrc.find("r14") == 0 || lowerSrc.find("r15") == 0) {
+                            // 64位寄存器，不需要大小指示符
+                            result = result.substr(0, bracketStart + 1) + "rip+0" +
+                                result.substr(bracketEnd);
+                        }
+                        else if (srcOperand.find("0x") != std::string::npos ||
+                            std::isdigit(srcOperand[0])) {
+                            // 立即数，需要dword ptr
+                            result = result.substr(0, bracketStart) + "dword ptr [rip+0" +
+                                result.substr(bracketEnd);
+                        }
+                        else {
+                            // 其他情况，默认不加大小指示符
+                            result = result.substr(0, bracketStart + 1) + "rip+0" +
+                                result.substr(bracketEnd);
+                        }
+                    }
+                }
+                else if (opcode == "cmp") {
+                    // cmp 默认使用 dword ptr（除非已有大小指示符）
+                    result = result.substr(0, bracketStart) + "dword ptr [rip+0" +
+                        result.substr(bracketEnd);
+                }
+                else {
+                    // 其他指令，默认不加大小指示符
+                    result = result.substr(0, bracketStart + 1) + "rip+0" +
+                        result.substr(bracketEnd);
+                }
+            }
+            else {
+                // 已有大小指示符，只替换方括号内的内容
+                result = result.substr(0, bracketStart + 1) + "rip+0" +
+                    result.substr(bracketEnd);
+            }
+
+            LOG_DEBUG_F("Converted [%s] to RIP-relative in: %s -> %s",
+                memOperand.c_str(), line.c_str(), result.c_str());
         }
 
         // 查找下一个

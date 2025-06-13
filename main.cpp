@@ -15,33 +15,63 @@ void TestComplexScript() {
 
     // The complex script with captured variables and float conversions
     std::string scriptContent = R"(
+
 [ENABLE]
 
-aobscanmodule(INJECT,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
-alloc(newmem,$1000,INJECT)
-
+aobscanmodule(aobplayer,Notepad.exe,4A 8B 14 10 48 8B 43 10) // should be unique
+alloc(newmem,$1000,aobplayer)
 label(code)
 label(return)
+label(health armor player location)
+registersymbol(health armor player location)
 
 newmem:
-
+  push rdx
+  mov [player],rax
+  mov rdx,[rax+30]
+  test rdx,rdx
+  je @f
+  lea rdx,[rdx+50]
+  mov [location],rdx
+@@:
+  lea rdx,[rax+1518]
+  cmp [health],1
+  jne @f
+  mov [rax+280],(float)500
+@@:
+  cmp [armor],1
+  jne @f
+  mov [rdx-0C],(float)100
 code:
-  mov rdx,[rax+r10]
-  mov rax,[rbx+10]
+  movss xmm0,[rdx]
+  pop rdx
   jmp return
 
-INJECT:
+newmem+200:
+health:
+dd 0
+armor:
+dd 0
+
+newmem+400:
+player:
+dq 0
+location:
+dq 0
+
+aobplayer:
   jmp newmem
   nop 3
 return:
-registersymbol(INJECT)
+registersymbol(aobplayer)
+
 
 [DISABLE]
 
-INJECT:
+aobplayer:
   db 4A 8B 14 10 48 8B 43 10
 
-unregistersymbol(INJECT)
+unregistersymbol(aobplayer)
 dealloc(newmem)
 
 )";

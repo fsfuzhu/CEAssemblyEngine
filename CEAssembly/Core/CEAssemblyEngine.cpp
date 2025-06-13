@@ -648,7 +648,72 @@ std::string CEAssemblyEngine::ReplaceSymbolsForEstimation(const std::string& lin
 	LOG_TRACE_F("Symbol replacement for estimation output: %s", result.c_str());
 	return result;
 }
+std::string ProcessNegativeOffset(const std::string& line) {
+	std::string result = line;
 
+	// 查找 [寄存器-偏移] 模式
+	size_t bracketStart = result.find('[');
+	while (bracketStart != std::string::npos) {
+		size_t bracketEnd = result.find(']', bracketStart);
+		if (bracketEnd == std::string::npos) break;
+
+		std::string memOperand = result.substr(bracketStart + 1, bracketEnd - bracketStart - 1);
+
+		// 查找减号
+		size_t minusPos = memOperand.find('-');
+		if (minusPos != std::string::npos && minusPos > 0) {
+			std::string regPart = memOperand.substr(0, minusPos);
+			std::string offsetPart = memOperand.substr(minusPos + 1);
+
+			// 去除空格
+			regPart.erase(std::remove_if(regPart.begin(), regPart.end(), ::isspace), regPart.end());
+			offsetPart.erase(std::remove_if(offsetPart.begin(), offsetPart.end(), ::isspace), offsetPart.end());
+
+			// 检查是否是寄存器
+			if (isX64RegisterName(regPart)) {
+				// 解析偏移值
+				unsigned int offset = 0;
+				bool parsed = false;
+
+				try {
+					if (offsetPart.find("0x") == 0 || offsetPart.find("0X") == 0) {
+						offset = std::stoul(offsetPart.substr(2), nullptr, 16);
+						parsed = true;
+					}
+					else if (std::all_of(offsetPart.begin(), offsetPart.end(), ::isxdigit)) {
+						offset = std::stoul(offsetPart, nullptr, 16);
+						parsed = true;
+					}
+				}
+				catch (...) {
+					parsed = false;
+				}
+
+				if (parsed) {
+					// 转换为补码形式
+					unsigned int negOffset = (~offset + 1) & 0xFFFFFFFF;
+
+					// 构建新的内存操作数
+					std::stringstream newOperand;
+					newOperand << "[" << regPart << "+0x" << std::hex << negOffset << "]";
+
+					// 替换原来的操作数
+					result = result.substr(0, bracketStart) +
+						newOperand.str() +
+						result.substr(bracketEnd + 1);
+
+					LOG_DEBUG_F("Converted negative offset: [%s-%s] -> %s",
+						regPart.c_str(), offsetPart.c_str(), newOperand.str().c_str());
+				}
+			}
+		}
+
+		// 查找下一个
+		bracketStart = result.find('[', bracketEnd);
+	}
+
+	return result;
+}
 bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 	if (m_currentAddress == 0) {
 		LOG_ERROR("Cannot process instruction without current address");
@@ -694,6 +759,7 @@ bool CEAssemblyEngine::ProcessAssemblyInstruction(const std::string& line) {
 
 	// 2. 执行符号替换
 	processedLine = ReplaceSymbols(processedLine);
+	processedLine = ProcessNegativeOffset(processedLine);
 
 	// 3. 特殊处理 @f 和 @b 标签
 	if (processedLine.find("@f") != std::string::npos ||
