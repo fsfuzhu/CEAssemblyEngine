@@ -28,7 +28,6 @@
     <ClInclude Include="CEAssembly\Scanner\PatternScanner.h" />
     <ClInclude Include="CEAssembly\Symbol\SymbolManager.h" />
     <ClInclude Include="CEAssembly\Utils\DebugHelper.h" />
-    <ClInclude Include="CEAssembly\Utils\StringUtils.h" />
     <ClInclude Include="include\keystone\arm.h" />
     <ClInclude Include="include\keystone\arm64.h" />
     <ClInclude Include="include\keystone\evm.h" />

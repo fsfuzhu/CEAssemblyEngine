@@ -16,58 +16,37 @@
     <Filter Include="include\keystone">
       <UniqueIdentifier>{4534b985-503b-4681-b6e4-de3fd39b94de}</UniqueIdentifier>
     </Filter>
-    <Filter Include="src\Parser">
-      <UniqueIdentifier>{36095833-97f8-477d-895b-f92c6be48227}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="src\Utils">
-      <UniqueIdentifier>{1e0ec1c9-dbfd-4f7d-9d7f-e273a73fc106}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\main.cpp">
+    <ClCompile Include="CEAssembly\Core\CEAssemblyEngine.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\CEAssemblyEngine.cpp">
+    <ClCompile Include="CEAssembly\Core\CEScript.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\MemoryAllocator.cpp">
+    <ClCompile Include="CEAssembly\Core\MemoryManager.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\PatternScanner.cpp">
+    <ClCompile Include="CEAssembly\Core\PassManager.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\SymbolManager.cpp">
+    <ClCompile Include="CEAssembly\Parser\CEScriptParser.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\Parser\CEScriptParser.cpp">
-      <Filter>src\Parser</Filter>
-    </ClCompile>
-    <ClCompile Include="src\Utils\StringUtils.cpp">
-      <Filter>src\Utils</Filter>
-    </ClCompile>
-    <ClCompile Include="src\CEScript.cpp">
+    <ClCompile Include="CEAssembly\Scanner\PatternScanner.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\ProcessManager.cpp">
+    <ClCompile Include="CEAssembly\Symbol\SymbolManager.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="src\DebugHelper.cpp">
+    <ClCompile Include="CEAssembly\Utils\DebugHelper.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="main.cpp">
       <Filter>src</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\CEAssemblyEngine.h">
-      <Filter>src</Filter>
-    </ClInclude>
-    <ClInclude Include="src\MemoryAllocator.h">
-      <Filter>src</Filter>
-    </ClInclude>
-    <ClInclude Include="src\PatternScanner.h">
-      <Filter>src</Filter>
-    </ClInclude>
-    <ClInclude Include="src\SymbolManager.h">
-      <Filter>src</Filter>
-    </ClInclude>
     <ClInclude Include="include\keystone\arm.h">
       <Filter>include\keystone</Filter>
     </ClInclude>
@@ -98,23 +77,32 @@
     <ClInclude Include="include\keystone\x86.h">
       <Filter>include\keystone</Filter>
     </ClInclude>
-    <ClInclude Include="src\Parser\CEScriptParser.h">
-      <Filter>src\Parser</Filter>
+    <ClInclude Include="CEAssembly\CEAssembly.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="src\Utils\StringUtils.h">
-      <Filter>src\Utils</Filter>
+    <ClInclude Include="CEAssembly\Core\CEAssemblyEngine.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="src\CEScript.h">
-      <Filter>src</Filter>
+    <ClInclude Include="CEAssembly\Core\CEScript.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="src\CEAssembly.h">
-      <Filter>src</Filter>
+    <ClInclude Include="CEAssembly\Core\MemoryManager.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="src\ProcessManager.h">
-      <Filter>src</Filter>
+    <ClInclude Include="CEAssembly\Core\PassManager.h">
+      <Filter>include</Filter>
     </ClInclude>
-    <ClInclude Include="src\DebugHelper.h">
-      <Filter>src</Filter>
+    <ClInclude Include="CEAssembly\Parser\CEScriptParser.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="CEAssembly\Scanner\PatternScanner.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="CEAssembly\Symbol\SymbolManager.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="CEAssembly\Utils\DebugHelper.h">
+      <Filter>include</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

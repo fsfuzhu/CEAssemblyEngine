@@ -552,137 +552,79 @@ void ShowInteractiveMenu() {
 }
 
 int main() {
-    // Initialize debug system
-    DEBUG_INIT(DebugLevel::Info);  // Change to Debug or Trace for more details
+    CEAssemblyEngine engine;
+    std::string buffer = R"(
+[ENABLE]
+aobscanmodule(aobplayer,notepad.exe,4A 8B 14 10 48 8B 43 10)
+alloc(newmem,$1000,aobplayer)
+label(code)
+label(return)
+label(health armor player location)
+registersymbol(health armor player location)
 
-    std::cout << "CE Assembly Engine - Comprehensive Test Suite" << std::endl;
-    std::cout << "=============================================" << std::endl;
+newmem:
+  push rdx
+  mov [player],rax
+  mov rdx,[rax+30]
+  test rdx,rdx
+  je @f
+  lea rdx,[rdx+50]
+  mov [location],rdx
+@@:
+  lea rdx,[rax+1518]
+  cmp [health],1
+  jne @f
+  mov [rax+280],(float)500
+@@:
+  cmp [armor],1
+  jne @f
+  mov [rdx-0C],(float)100
+code:
+  movss xmm0,[rdx]
+  pop rdx
+  jmp return
 
-    // Default target process
-    std::string targetProcess = "notepad.exe";
+newmem+200:
+health:
+dd 0
+armor:
+dd 0
 
-    // Check command line arguments
-    if (GetCommandLineA() && strstr(GetCommandLineA(), "--process=")) {
-        char* processStart = strstr(GetCommandLineA(), "--process=") + 10;
-        char processName[256] = { 0 };
-        sscanf_s(processStart, "%255s", processName, 256);
-        targetProcess = processName;
-    }
+newmem+400:
+player:
+dq 0
+location:
+dq 0
 
-    // Interactive menu loop
-    bool running = true;
-    while (running) {
-        ShowInteractiveMenu();
+aobplayer:
+  jmp newmem
+  nop 3
+return:
+registersymbol(aobplayer)
 
-        int choice;
-        std::cin >> choice;
-        std::cin.ignore(); // Clear newline
+[DISABLE]
+aobplayer:
+  db 4A 8B 14 10 48 8B 43 10
+dealloc(newmem)
+)";
+    if (engine.AttachToProcess("notepad.exe")) {
+        auto script = engine.CreateScript("CustomScript");
+        if (script->Load(buffer)) {
+            std::cout << "Script loaded successfully" << std::endl;
 
-        switch (choice) {
-        case 1: {
-            // Run all tests
-            std::cout << "\nTarget process (default: " << targetProcess << "): ";
-            std::string input;
-            std::getline(std::cin, input);
-            if (!input.empty()) {
-                targetProcess = input;
+            if (script->Enable()) {
+                std::cout << "Script enabled! Press Enter to disable..." << std::endl;
+                std::cin.get();
+                script->Disable();
             }
-
-            CEAssemblyTestSuite suite(targetProcess);
-            if (suite.Initialize()) {
-                suite.RunAllTests();
+            else {
+                std::cout << "Failed to enable script: " << script->GetLastError() << std::endl;
             }
-            break;
         }
-
-        case 2: {
-            // Test custom script from file
-            std::cout << "Enter script file path: ";
-            std::string filePath;
-            std::getline(std::cin, filePath);
-
-            std::ifstream file(filePath);
-            if (!file.is_open()) {
-                std::cout << "Failed to open file: " << filePath << std::endl;
-                break;
-            }
-
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-
-            CEAssemblyEngine engine;
-            if (engine.AttachToProcess(targetProcess)) {
-                auto script = engine.CreateScript("CustomScript");
-                if (script->Load(buffer.str())) {
-                    std::cout << "Script loaded successfully" << std::endl;
-
-                    if (script->Enable()) {
-                        std::cout << "Script enabled! Press Enter to disable..." << std::endl;
-                        std::cin.get();
-                        script->Disable();
-                    }
-                    else {
-                        std::cout << "Failed to enable script: " << script->GetLastError() << std::endl;
-                    }
-                }
-                else {
-                    std::cout << "Failed to load script: " << script->GetLastError() << std::endl;
-                }
-            }
-            break;
-        }
-
-        case 3: {
-            // Test custom script inline
-            std::cout << "Enter script (type 'END' on a new line to finish):" << std::endl;
-            std::string scriptContent;
-            std::string line;
-
-            while (std::getline(std::cin, line)) {
-                if (line == "END") break;
-                scriptContent += line + "\n";
-            }
-
-            CEAssemblyEngine engine;
-            if (engine.AttachToProcess(targetProcess)) {
-                auto script = engine.CreateScript("InlineScript");
-                if (script->Load(scriptContent)) {
-                    std::cout << "Script loaded successfully" << std::endl;
-
-                    if (script->Enable()) {
-                        std::cout << "Script enabled! Press Enter to disable..." << std::endl;
-                        std::cin.get();
-                        script->Disable();
-                    }
-                    else {
-                        std::cout << "Failed to enable script: " << script->GetLastError() << std::endl;
-                    }
-                }
-                else {
-                    std::cout << "Failed to load script: " << script->GetLastError() << std::endl;
-                }
-            }
-            break;
-        }
-
-        case 4: {
-            // List processes
-            CEAssembly::ListProcesses();
-            break;
-        }
-
-        case 5: {
-            running = false;
-            break;
-        }
-
-        default:
-            std::cout << "Invalid choice!" << std::endl;
+        else {
+            std::cout << "Failed to load script: " << script->GetLastError() << std::endl;
         }
     }
-
-    // Cleanup
-    DEBUG_SHUTDOWN();
 
     std::cout << "\nTest suite completed. Press Enter to exit..." << std::endl;
     std::cin.get();

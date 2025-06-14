@@ -1029,9 +1029,14 @@ bool CEAssemblyEngine::SmartAssemble(const std::string& instruction, uintptr_t a
 		}
 	}
 
-	// 所有尝试都失败了
-	LOG_ERROR_F("Smart assembly failed for: %s (tried %zu variants)",
-		instruction.c_str(), attempts.size());
+	ks_err lastError = ks_errno(ksEngine);
+	if (lastError == KS_ERR_ASM_SYMBOL_MISSING) {
+		LOG_TRACE_F("Smart assembly skipped for unresolved symbol: %s", instruction.c_str());
+	}
+	else {
+		LOG_ERROR_F("Smart assembly failed for: %s (tried %zu variants)",
+			instruction.c_str(), attempts.size());
+	}
 	return false;
 }
 

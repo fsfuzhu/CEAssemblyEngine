@@ -1107,9 +1107,6 @@ bool TwoPassAssemblyPass::CalculateSizesAndAddresses(std::vector<InstructionCont
                     smartSize, ctx.originalLine.c_str());
             }
             else {
-                LOG_ERROR_F("Failed to assemble for size: %s (error: %s)", asmLine.c_str(), ks_strerror(err));
-                warnings.push_back("Size calculation failed for: " + ctx.originalLine);
-
                 // 使用保守估计
                 size_t estimatedSize = 8;
 
